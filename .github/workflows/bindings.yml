@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -26,7 +26,7 @@ jobs:
 
       - name: Build Python Bindings
         run: |
-          for PYTHON_VERSION in 3.7 3.8 3.9 3.10 3.11 3.12; do
+          for PYTHON_VERSION in 3.7 3.8 3.9 3.10 3.11 3.12 3.13 3.14; do
               docker run --rm -v "$(pwd)":/raspsim python:"$PYTHON_VERSION" ./raspsim/.github/workflows/build-python.sh &
           done
 
@@ -45,7 +45,7 @@ jobs:
     name: Publish Python 🐍 distribution 📦 to PyPI
     needs:
       - build
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     environment:
       name: pypi
       url: https://pypi.org/p/raspsim
