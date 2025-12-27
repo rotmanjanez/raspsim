@@ -2219,7 +2219,7 @@ ostream& BasicBlockCache::print(ostream& os) {
       //floatstring(100.0 * percent_of_total_uops, 6, 2), "%uops",
       intstring(bb.hitcount * bb.tagcount, 10), "uu ",
       ": taken 0x", hexstring(bb.rip_taken, 48), ", seq ", hexstring(bb.rip_not_taken, 48);
-    if (bb.rip_taken == bb.rip) os << " [loop]";
+    if (bb.rip_taken == static_cast<W64>(bb.rip)) os << " [loop]";
     if (bb.repblock) os << " [repblock]";
     os << endl;
   }

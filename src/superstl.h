@@ -1497,12 +1497,13 @@ namespace superstl {
 #define BITS_PER_WORD ((sizeof(unsigned long) == 8) ? 64 : 32)
 #define BITVEC_WORDS(n) ((n) < 1 ? 0 : ((n) + BITS_PER_WORD - 1)/BITS_PER_WORD)
 
-#ifdef __x86_64__
-#define __builtin_ctzl(t) lsbindex64(t)
-#define __builtin_clzl(t) msbindex64(t)
+// Portable bit scan functions - use size of unsigned long to determine variant
+#if ULONG_MAX == 0xFFFFFFFFFFFFFFFFUL
+#define bitvec_ctzl(t) lsbindex64(t)
+#define bitvec_clzl(t) msbindex64(t)
 #else
-#define __builtin_ctzl(t) lsbindex32(t)
-#define __builtin_clzl(t) msbindex32(t)
+#define bitvec_ctzl(t) lsbindex32(t)
+#define bitvec_clzl(t) msbindex32(t)
 #endif
 
   template<size_t N>
@@ -1648,7 +1649,7 @@ namespace superstl {
     size_t lsbop(size_t notfound) const {
       foreach (i, N) {
         T t = w[i];
-        if likely (t) return (i * BITS_PER_WORD) + __builtin_ctzl(t);
+        if likely (t) return (i * BITS_PER_WORD) + bitvec_ctzl(t);
       }
       return notfound;
     }
@@ -1657,7 +1658,7 @@ namespace superstl {
     size_t msbop(size_t notfound) const {
       for (int i = N-1; i >= 0; i--) {
         T t = w[i];
-        if likely (t) return (i * BITS_PER_WORD) + __builtin_clzl(t);
+        if likely (t) return (i * BITS_PER_WORD) + bitvec_clzl(t);
       }
       return notfound;
     }
@@ -1733,10 +1734,10 @@ namespace superstl {
     bool nonzeroop() const { return (!!w); }
     size_t popcountop() const { return popcount64(w); }
     unsigned long integerop() const { return w; }
-    size_t lsbop() const { return __builtin_ctzl(w); }
-    size_t msbop() const { return __builtin_clzl(w); }
-    size_t lsbop(size_t notfound) const { return (w) ? __builtin_ctzl(w) : notfound; }
-    size_t msbop(size_t notfound) const { return (w) ? __builtin_clzl(w) : notfound; }
+    size_t lsbop() const { return bitvec_ctzl(w); }
+    size_t msbop() const { return bitvec_clzl(w); }
+    size_t lsbop(size_t notfound) const { return (w) ? bitvec_ctzl(w) : notfound; }
+    size_t msbop(size_t notfound) const { return (w) ? bitvec_clzl(w) : notfound; }
     void maskop(size_t count) {
       T m =
         (!count) ? 0 :
@@ -1763,7 +1764,7 @@ namespace superstl {
 
       T x = w >> __prev;
       if likely (x != 0)
-        return __builtin_ctzl(x) + __prev;
+        return bitvec_ctzl(x) + __prev;
       else
         return notfound;
     }

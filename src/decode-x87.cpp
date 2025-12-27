@@ -3,15 +3,44 @@
 // Decoder for x87 FPU instructions
 //
 // Copyright 1999-2008 Matt T. Yourst <yourst@yourst.com>
+// Refactored for cross-platform support
 //
 
 #include <decode.h>
+#include <cfenv>
+
+// Undefine the nan macro temporarily to use std::nan
+#ifdef nan
+#undef nan
+#define PTL_NAN_DEFINED 1
+#endif
 
 //
 // x87 assists
 //
 
 #define FP_STACK_MASK 0x3f
+
+// Portable float to integer conversion
+static W64 portable_fistpll(double value) {
+  // Save current rounding mode
+  int saved_round = std::fegetround();
+  std::fesetround(FE_TONEAREST);
+
+  W64 result;
+  if (std::isnan(value) || std::isinf(value)) {
+    result = 0x8000000000000000ULL;  // Indefinite integer
+  } else if (value >= static_cast<double>(0x7FFFFFFFFFFFFFFFLL)) {
+    result = 0x7FFFFFFFFFFFFFFFULL;
+  } else if (value <= static_cast<double>(-0x7FFFFFFFFFFFFFFFLL - 1)) {
+    result = 0x8000000000000000ULL;
+  } else {
+    result = static_cast<W64>(std::llrint(value));
+  }
+
+  std::fesetround(saved_round);
+  return result;
+}
 
 void assist_x87_fist(Context& ctx) {
   W64& tos = ctx.commitarf[REG_fptos];
@@ -20,13 +49,8 @@ void assist_x87_fist(Context& ctx) {
   W64 pop = ctx.commitarf[REG_ar2] & 0x1;
   W64 st0 = ctx.fpstack[tos >> 3];
   SSEType st0u(st0);
-  W16 oldfpcw = cpu_get_fpcw();
 
-  cpu_set_fpcw(ctx.fpcw);
-  asm("fldl %0\n\t"
-      "fistpll %0\n\t"
-      :"+m"(st0u.d));
-  cpu_set_fpcw(oldfpcw);
+  st0u.w64 = portable_fistpll(st0u.d);
 
   PageFaultErrorCode pfec;
   Waddr faultaddr;
@@ -49,25 +73,41 @@ void assist_x87_fldcw(Context& ctx) {
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
 }
 
+// Portable FPREM (partial remainder) implementation
+static double portable_fprem(double st0, double st1, W16& fpsw_raw) {
+  X87StatusWord fpsw(fpsw_raw);
+
+  if (std::isnan(st0) || std::isnan(st1) || std::isinf(st0) || st1 == 0.0) {
+    fpsw.c2 = 0;
+    fpsw_raw = fpsw;
+    return NAN;
+  }
+
+  double quotient = std::trunc(st0 / st1);
+  double remainder = st0 - quotient * st1;
+
+  // Extract quotient bits for status word
+  W64 q = static_cast<W64>(std::abs(quotient)) & 0x7;
+  fpsw.c0 = (q >> 2) & 1;  // Q2
+  fpsw.c3 = (q >> 1) & 1;  // Q1
+  fpsw.c1 = q & 1;         // Q0
+  fpsw.c2 = 0;  // Reduction complete
+
+  fpsw_raw = fpsw;
+  return remainder;
+}
+
 void assist_x87_fprem(Context& ctx) {
   W64& tos = ctx.commitarf[REG_fptos];
   W64& st0 = ctx.fpstack[tos >> 3];
   W64& st1 = ctx.fpstack[((tos >> 3) + 1) & 0x7];
   SSEType st0u(st0); SSEType st1u(st1);
 
-  X87StatusWord fpsw;
-  asm("fldl %[st1]\n"
-      "fldl %[st0]\n"
-      "fprem\n"
-      "fstsw %%ax\n"
-      "fstpl %[st0]\n"
-      "ffree %%st(0)\n"
-      "fincstp\n"
-      : [st0] "+m" (st0u.d),
-              "=a" (*(W16*)&fpsw)
-      : [st1]  "m" (st1u.d));
+  W16 fpsw_raw = 0;
+  st0u.d = portable_fprem(st0u.d, st1u.d, fpsw_raw);
   st0 = st0u.w64;
 
+  X87StatusWord fpsw(fpsw_raw);
   X87StatusWord* sw = (X87StatusWord*) &ctx.commitarf[REG_fpsw];
   sw->c0 = fpsw.c0;
   sw->c1 = fpsw.c1;
@@ -96,40 +136,38 @@ void assist_x87_##name(Context& ctx) { \
 #undef log2
 
 //
-// NOTE: Under no circumstances can we let out-of-range values get passed to the
-// standard library math functions! It will screw up the x87 FPU state inside
-// PTLsim and we may never recover. Instead, we take control right here.
+// Portable implementations of x87 transcendental functions
 //
 
-double x87_fyl2xp1(double st1, double st0) {
-  double stout;
-  asm("fldl %[st1]; fldl %[st0]; fyl2xp1; fstpl %[stout];" : [stout] "=m" (stout) : [st0] "m" (st0), [st1] "m" (st1));
-  return stout;
+// Portable fyl2xp1: st1 * log2(st0 + 1.0)
+static double portable_fyl2xp1(double st1, double st0) {
+  return st1 * std::log2(st0 + 1.0);
 }
 
-double x87_fyl2x(double st1, double st0) {
-  double stout;
-  asm("fldl %[st1]; fldl %[st0]; fyl2x; fstpl %[stout];" : [stout] "=m" (stout) : [st0] "m" (st0), [st1] "m" (st1));
-  return stout;
+// Portable fyl2x: st1 * log2(st0)
+static double portable_fyl2x(double st1, double st0) {
+  if (st0 <= 0.0) {
+    if (st0 == 0.0) {
+      return (st1 < 0.0) ? INFINITY : -INFINITY;
+    }
+    return NAN;
+  }
+  return st1 * std::log2(st0);
 }
 
-double x87_fpatan(double st1, double st0) {
-  double stout;
-  asm("fldl %[st1]; fldl %[st0]; fpatan; fstpl %[stout];" : [stout] "=m" (stout) : [st0] "m" (st0), [st1] "m" (st1));
-  return stout;
+// Portable fpatan: atan2(st1, st0)
+static double portable_fpatan(double st1, double st0) {
+  return std::atan2(st1, st0);
 }
 
 // st(1) = st(1) * log2(st(0)) and pop st(0)
-make_two_input_x87_func_with_pop(fyl2x, st1u.d = x87_fyl2x(st1u.d, st0u.d));
+make_two_input_x87_func_with_pop(fyl2x, st1u.d = portable_fyl2x(st1u.d, st0u.d));
 
 // st(1) = st(1) * log2(st(0) + 1.0) and pop st(0)
-// This insn has very strange semantics: if (st0 < -1.0),
-// such that ((st0 + 1.0) < 0), rather than return NaN, it
-// returns the old value in st0 but still pops the stack.
-make_two_input_x87_func_with_pop(fyl2xp1, st1u.d = x87_fyl2xp1(st1u.d, st0u.d));
+make_two_input_x87_func_with_pop(fyl2xp1, st1u.d = portable_fyl2xp1(st1u.d, st0u.d));
 
 // st(1) = arctan(st(1) / st(0))
-make_two_input_x87_func_with_pop(fpatan, st1u.d = x87_fpatan(st1u.d, st0u.d));
+make_two_input_x87_func_with_pop(fpatan, st1u.d = portable_fpatan(st1u.d, st0u.d));
 
 void assist_x87_fscale(Context& ctx) {
   W64& tos = ctx.commitarf[REG_fptos];
@@ -161,12 +199,12 @@ make_unary_x87_func(f2xm1, std::exp2(ra.d) - 1);
 
 void assist_x87_frndint(Context& ctx) {
   W64& r = ctx.fpstack[ctx.commitarf[REG_fptos] >> 3];
-#if 0
-  assert(0);  // Now implemented using uops
   SSEType ra(r);
+
+  // Portable implementation using C++ rounding
   switch (ctx.fpcw.rc) {
   case 0: // round to nearest (round)
-    ra.d = std::round(ra.d); break;
+    ra.d = std::rint(ra.d); break;
   case 1: // round down (floor)
     ra.d = std::floor(ra.d); break;
   case 2: // round up (ceil)
@@ -175,19 +213,6 @@ void assist_x87_frndint(Context& ctx) {
     ra.d = std::trunc(ra.d); break;
   }
   r = ra.w64;
-#else
-  int ofpcw;  // Old fpcw
-  int tfpcw = ctx.fpcw & 0x0c00 | 0x37f;
-  asm (
-    "fstcw %0    \n\t"
-    "fldcw %4    \n\t"
-    "fldl  %3    \n\t"
-    "frndint     \n\t"
-    "fstpl %1    \n\t"
-    "fldcw %2"
-    :"=m" (ofpcw), "=m" (r)
-    : "m" (ofpcw),  "m" (r), "m" (tfpcw));
-#endif
 
   X87StatusWord* sw = (X87StatusWord*)&ctx.commitarf[REG_fpsw];
   sw->c1 = 0; sw->c2 = 0;
@@ -215,7 +240,38 @@ make_two_output_x87_func_with_push(fsincos, (st1u.d = std::cos(st0u.d), st0u.d =
 // st(0) = tan(st(0)) and push value 1.0
 make_two_output_x87_func_with_push(fptan, (st1u.d = 1.0, st0u.d = std::tan(st0u.d)));
 
-make_two_output_x87_func_with_push(fxtract, (st1u.d = significand(st0u.d), st0u.d = std::ilogb(st0u.d)));
+// Portable significand extraction
+static double portable_significand(double x) {
+  if (x == 0.0 || std::isnan(x) || std::isinf(x)) return x;
+  int exp;
+  return std::frexp(x, &exp) * 2.0;
+}
+
+make_two_output_x87_func_with_push(fxtract, (st1u.d = portable_significand(st0u.d), st0u.d = std::ilogb(st0u.d)));
+
+// Portable FPREM1 (IEEE partial remainder) implementation
+static double portable_fprem1(double st0, double st1, W16& fpsw_raw) {
+  X87StatusWord fpsw(fpsw_raw);
+
+  if (std::isnan(st0) || std::isnan(st1) || std::isinf(st0) || st1 == 0.0) {
+    fpsw.c2 = 0;
+    fpsw_raw = fpsw;
+    return NAN;
+  }
+
+  double remainder = std::remainder(st0, st1);
+  double quotient = std::round(st0 / st1);
+
+  // Extract quotient bits for status word
+  W64 q = static_cast<W64>(std::abs(quotient)) & 0x7;
+  fpsw.c0 = (q >> 2) & 1;  // Q2
+  fpsw.c3 = (q >> 1) & 1;  // Q1
+  fpsw.c1 = q & 1;         // Q0
+  fpsw.c2 = 0;  // Reduction complete
+
+  fpsw_raw = fpsw;
+  return remainder;
+}
 
 void assist_x87_fprem1(Context& ctx) {
   W64& tos = ctx.commitarf[REG_fptos];
@@ -223,10 +279,11 @@ void assist_x87_fprem1(Context& ctx) {
   W64& st1 = ctx.fpstack[((tos >> 3) + 1) & 0x7];
   SSEType st0u(st0); SSEType st1u(st1);
 
-  X87StatusWord fpsw;
-  asm("fldl %[st1]; fldl %[st0]; fprem1; fstsw %%ax; fstpl %[st0]; ffree %%st(0); fincstp;" : [st0] "+m" (st0u.d), "=a" (*(W16*)&fpsw) : [st1] "m" (st1u.d));
+  W16 fpsw_raw = 0;
+  st0u.d = portable_fprem1(st0u.d, st1u.d, fpsw_raw);
   st0 = st0u.w64;
 
+  X87StatusWord fpsw(fpsw_raw);
   X87StatusWord* sw = (X87StatusWord*)&ctx.commitarf[REG_fpsw];
   sw->c0 = fpsw.c0;
   sw->c1 = fpsw.c1;
@@ -235,22 +292,36 @@ void assist_x87_fprem1(Context& ctx) {
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
 }
 
+// Portable FXAM implementation
 void assist_x87_fxam(Context& ctx) {
   W64& r = ctx.fpstack[ctx.commitarf[REG_fptos] >> 3];
   SSEType ra(r);
 
-  X87StatusWord fpsw;
-  asm("fxam; fstsw %%ax" : "=a" (*(W16*)&fpsw) : "t" (ra.d));
-
   X87StatusWord* sw = (X87StatusWord*)&ctx.commitarf[REG_fpsw];
-  sw->c0 = fpsw.c0;
-  sw->c1 = fpsw.c1;
-  sw->c2 = fpsw.c2;
-  sw->c3 = fpsw.c3;
+
+  // Determine class of floating point value
+  // c1 = sign bit
+  sw->c1 = std::signbit(ra.d) ? 1 : 0;
+
+  if (std::isnan(ra.d)) {
+    // NaN: c3=0, c2=0, c0=1
+    sw->c3 = 0; sw->c2 = 0; sw->c0 = 1;
+  } else if (std::isinf(ra.d)) {
+    // Infinity: c3=0, c2=1, c0=1
+    sw->c3 = 0; sw->c2 = 1; sw->c0 = 1;
+  } else if (ra.d == 0.0) {
+    // Zero: c3=1, c2=0, c0=0
+    sw->c3 = 1; sw->c2 = 0; sw->c0 = 0;
+  } else if (std::fpclassify(ra.d) == FP_SUBNORMAL) {
+    // Denormal: c3=1, c2=1, c0=0
+    sw->c3 = 1; sw->c2 = 1; sw->c0 = 0;
+  } else {
+    // Normal: c3=0, c2=1, c0=0
+    sw->c3 = 0; sw->c2 = 1; sw->c0 = 0;
+  }
+
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
 }
-
-// We need a general purpose "copy from user virtual addresses" function
 
 void assist_x87_fld80(Context& ctx) {
   // Virtual address is in sr2
@@ -300,13 +371,13 @@ void assist_x87_fstp80(Context& ctx) {
 }
 
 void assist_x87_fsave(Context& ctx) {
-  //++MTY TODO
+  // Not implemented - raise invalid opcode exception
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
   ctx.propagate_x86_exception(EXCEPTION_x86_invalid_opcode);
 }
 
 void assist_x87_frstor(Context& ctx) {
-  //++MTY TODO
+  // Not implemented - raise invalid opcode exception
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
   ctx.propagate_x86_exception(EXCEPTION_x86_invalid_opcode);
 }
@@ -333,65 +404,11 @@ void assist_x87_finit(Context& ctx) {
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
 }
 
-//
-// FCOM and FCOMP (with pop) need to transform SSE-style flags
-// into x87 flags and write those flags to fpsw:
-//
-// COMISD semantics:
-// ZF PF CF
-// 0  0  0     ra > rb
-// 0  0  1     ra < rb
-// 1  0  0     ra == rb
-// 1  1  1     unordered
-//
-// x87 FCOM semantics:
-// C3 C2 C1 C0
-// ZF PF -- CF
-// 0  0  0  0  ra > rb
-// 0  0  0  1  ra < rb
-// 1  0  0  0  ra == rb
-// 1  1  0  1  unordered
-//
-// Notice the pattern: ZF,PF,CF -> C3,C2,C0 (skipping C1)
-//
-//                           *         *    *
-// Flags format: OF - - - SF ZF - AF - PF - CF
-//               11       7  6    4    2    0
-//               rb       ra ra   ra   ra   rb
-//
-//
-// FPSW format:
-//
-//  b C3 (TOS) C2 C1 C0 es sf pe ue oe ze de ie
-// 15 14 13-11 10  9  8  7  6  5  4  3  2  1  0
-//
-// SF ZF -- AF -- PF -- CF
-//
-// Mapping table: 128 (bits 6:0) -> 4 (x87 flag bits)
-//
-//
-// #include <ptlhwdef.h>
-//
-// void gen_fcmpcc_to_fcom_flags() {
-//
-//   foreach (v, 128) {
-//      bool zf = bit(v, log2(FLAG_ZF));
-//      bool pf = bit(v, log2(FLAG_PF));
-//      bool cf = bit(v, log2(FLAG_CF));
-//
-//      bool c3 = zf;
-//      bool c2 = pf;
-//      bool c1 = 0;
-//      bool c0 = cf;
-//
-//      int out = (c3<<3) | (c2<<2) | (c1<<1) | (c0<<0);
-//
-//      if ((v % 16) == 0) cout << "  ";
-//      cout << intstring(out, 2), ", ";
-//      if ((v % 16) == 15) cout << endl;
-//      }
-//    }
-//
+// Restore nan macro if it was defined
+#ifdef PTL_NAN_DEFINED
+#define nan NAN
+#undef PTL_NAN_DEFINED
+#endif
 
 static const byte translate_fcmpcc_to_x87[128] = {
   0,  1,  0,  1,  4,  5,  4,  5,  0,  1,  0,  1,  4,  5,  4,  5,

@@ -3,29 +3,94 @@
 // Decoder for complex instructions
 //
 // Copyright 1999-2008 Matt T. Yourst <yourst@yourst.com>
+// Refactored for cross-platform support
 //
 
 #include <decode.h>
 
+// Portable division implementation using superstl div_rem
 template <typename T> void assist_div(Context& ctx) {
-  Waddr rax = ctx.commitarf[REG_rax]; Waddr rdx = ctx.commitarf[REG_rdx];
-  asm("div %[divisor];" : "+a" (rax), "+d" (rdx) : [divisor] "q" ((T)ctx.commitarf[REG_ar1]));
-  ctx.commitarf[REG_rax] = rax; ctx.commitarf[REG_rdx] = rdx;
+  T quotient, remainder;
+  T dividend_hi, dividend_lo, divisor;
+
+  if constexpr (sizeof(T) == 1) {
+    dividend_hi = 0;
+    dividend_lo = static_cast<T>(ctx.commitarf[REG_rax] & 0xFFFF);
+    divisor = static_cast<T>(ctx.commitarf[REG_ar1]);
+  } else if constexpr (sizeof(T) == 2) {
+    dividend_hi = static_cast<T>(ctx.commitarf[REG_rdx] & 0xFFFF);
+    dividend_lo = static_cast<T>(ctx.commitarf[REG_rax] & 0xFFFF);
+    divisor = static_cast<T>(ctx.commitarf[REG_ar1]);
+  } else if constexpr (sizeof(T) == 4) {
+    dividend_hi = static_cast<T>(ctx.commitarf[REG_rdx] & 0xFFFFFFFF);
+    dividend_lo = static_cast<T>(ctx.commitarf[REG_rax] & 0xFFFFFFFF);
+    divisor = static_cast<T>(ctx.commitarf[REG_ar1]);
+  } else {
+    dividend_hi = static_cast<T>(ctx.commitarf[REG_rdx]);
+    dividend_lo = static_cast<T>(ctx.commitarf[REG_rax]);
+    divisor = static_cast<T>(ctx.commitarf[REG_ar1]);
+  }
+
+  bool ok = div_rem(quotient, remainder, dividend_hi, dividend_lo, divisor);
+
+  if (!ok) {
+    ctx.propagate_x86_exception(EXCEPTION_x86_divide, 0);
+    return;
+  }
+
+  if constexpr (sizeof(T) == 1) {
+    ctx.commitarf[REG_rax] = (ctx.commitarf[REG_rax] & ~0xFFFFULL) |
+                              ((static_cast<W64>(remainder) & 0xFF) << 8) |
+                              (static_cast<W64>(quotient) & 0xFF);
+  } else {
+    ctx.commitarf[REG_rax] = static_cast<W64>(quotient);
+    ctx.commitarf[REG_rdx] = static_cast<W64>(remainder);
+  }
+
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
 }
 
 template <typename T> void assist_idiv(Context& ctx) {
-  Waddr rax = ctx.commitarf[REG_rax]; Waddr rdx = ctx.commitarf[REG_rdx];
-  asm("idiv %[divisor];" : "+a" (rax), "+d" (rdx) : [divisor] "q" ((T)ctx.commitarf[REG_ar1]));
-  ctx.commitarf[REG_rax] = rax; ctx.commitarf[REG_rdx] = rdx;
+  T quotient, remainder;
+  T dividend_hi, dividend_lo, divisor;
+
+  if constexpr (sizeof(T) == 1) {
+    W16 ax = static_cast<W16>(ctx.commitarf[REG_rax] & 0xFFFF);
+    dividend_hi = static_cast<T>((ax >> 8) & 0xFF);
+    dividend_lo = static_cast<T>(ax & 0xFF);
+    divisor = static_cast<T>(ctx.commitarf[REG_ar1]);
+  } else if constexpr (sizeof(T) == 2) {
+    dividend_hi = static_cast<T>(ctx.commitarf[REG_rdx] & 0xFFFF);
+    dividend_lo = static_cast<T>(ctx.commitarf[REG_rax] & 0xFFFF);
+    divisor = static_cast<T>(ctx.commitarf[REG_ar1]);
+  } else if constexpr (sizeof(T) == 4) {
+    dividend_hi = static_cast<T>(ctx.commitarf[REG_rdx] & 0xFFFFFFFF);
+    dividend_lo = static_cast<T>(ctx.commitarf[REG_rax] & 0xFFFFFFFF);
+    divisor = static_cast<T>(ctx.commitarf[REG_ar1]);
+  } else {
+    dividend_hi = static_cast<T>(ctx.commitarf[REG_rdx]);
+    dividend_lo = static_cast<T>(ctx.commitarf[REG_rax]);
+    divisor = static_cast<T>(ctx.commitarf[REG_ar1]);
+  }
+
+  bool ok = div_rem_s(quotient, remainder, dividend_hi, dividend_lo, divisor);
+
+  if (!ok) {
+    ctx.propagate_x86_exception(EXCEPTION_x86_divide, 0);
+    return;
+  }
+
+  if constexpr (sizeof(T) == 1) {
+    ctx.commitarf[REG_rax] = (ctx.commitarf[REG_rax] & ~0xFFFFULL) |
+                              ((static_cast<W64>(remainder) & 0xFF) << 8) |
+                              (static_cast<W64>(quotient) & 0xFF);
+  } else {
+    ctx.commitarf[REG_rax] = static_cast<W64>(quotient);
+    ctx.commitarf[REG_rdx] = static_cast<W64>(remainder);
+  }
+
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
 }
-
-// Not possible in 64-bit mode
-#ifndef __x86_64__
-template <> void assist_div<W64>(Context& ctx) { assert(false); }
-template <> void assist_idiv<W64>(Context& ctx) { assert(false); }
-#endif
 
 template void assist_div<byte>(Context& ctx);
 template void assist_div<W16>(Context& ctx);
@@ -77,7 +142,7 @@ void assist_syscall(Context& ctx) {
   handle_syscall_assist(ctx);
 #else
   if (ctx.use64) {
-#ifdef __x86_64__
+#if INTPTR_MAX == INT64_MAX
     handle_syscall_64bit();
 #endif
   } else {
@@ -111,218 +176,78 @@ void assist_sysenter(Context& ctx) {
 #else
   handle_syscall_32bit(SYSCALL_SEMANTICS_SYSENTER);
 #endif
-  // REG_rip is filled out for us
 }
 
-static const char cpuid_vendor[12+1] = "GenuineIntel";
-static const char cpuid_description[48+1] = "Intel(R) Xeon(TM) CPU 2.00 GHz                  ";
+void assist_iret16(Context& ctx) {
+  // Technically possible but we don't support 16-bit mode
+  assert(false);
+}
 
-//static const char cpuid_vendor[12+1] = "PTLsimCPUx64";
-//static const char cpuid_description[48+1] = "PTLsim Cycle Accurate x86-64 Simulator Model    ";
+void assist_iret32(Context& ctx) {
+#ifdef PTLSIM_HYPERVISOR
+  //++MTY TODO
+  cerr << "assist_iret32()", endl, flush;
+  assert(false);
+#else
+  // Only used in full system PTLsim: return to user mode
+  assert(false);
+#endif
+}
 
-
-//
-// CPUID level 0x00000001, result in %edx
-//
-#define X86_FEATURE_FPU		(1 <<  0) // Onboard FPU
-#define X86_FEATURE_VME		(1 <<  1) // Virtual Mode Extensions
-#define X86_FEATURE_DE		(1 <<  2) // Debugging Extensions
-#define X86_FEATURE_PSE 	(1 <<  3) // Page Size Extensions
-#define X86_FEATURE_TSC		(1 <<  4) // Time Stamp Counter
-#define X86_FEATURE_MSR		(1 <<  5) // Model-Specific Registers, RDMSR, WRMSR
-#define X86_FEATURE_PAE		(1 <<  6) // Physical Address Extensions
-#define X86_FEATURE_MCE		(1 <<  7) // Machine Check Architecture
-
-#define X86_FEATURE_CX8		(1 <<  8) // CMPXCHG8 instruction
-#define X86_FEATURE_APIC	(1 <<  9) // Onboard APIC
-#define X86_FEATURE_BIT10 (1 << 10) // (undefined)
-#define X86_FEATURE_SEP		(1 << 11) // SYSENTER/SYSEXIT
-#define X86_FEATURE_MTRR	(1 << 12) // Memory Type Range Registers
-#define X86_FEATURE_PGE		(1 << 13) // Page Global Enable
-#define X86_FEATURE_MCA		(1 << 14) // Machine Check Architecture
-#define X86_FEATURE_CMOV	(1 << 15) // CMOV instruction (FCMOVCC and FCOMI too if FPU present)
-
-#define X86_FEATURE_PAT		(1 << 16) // Page Attribute Table
-#define X86_FEATURE_PSE36	(1 << 17) // 36-bit PSEs
-#define X86_FEATURE_PN		(1 << 18) // Processor serial number
-#define X86_FEATURE_CLFL  (1 << 19) // Supports the CLFLUSH instruction
-#define X86_FEATURE_NX    (1 << 20) // No-Execute page attribute
-#define X86_FEATURE_DTES	(1 << 21) // Debug Trace Store
-#define X86_FEATURE_ACPI	(1 << 22) // ACPI via MSR
-#define X86_FEATURE_MMX		(1 << 23) // Multimedia Extensions
-
-#define X86_FEATURE_FXSR	(1 << 24) // FXSAVE and FXRSTOR instructions; CR4.OSFXSR available
-#define X86_FEATURE_XMM		(1 << 25) // Streaming SIMD Extensions
-#define X86_FEATURE_XMM2	(1 << 26) // Streaming SIMD Extensions-2
-#define X86_FEATURE_SNOOP (1 << 27) // CPU self snoop
-#define X86_FEATURE_HT		(1 << 28) // Hyper-Threading
-#define X86_FEATURE_ACC		(1 << 29) // Automatic clock control
-#define X86_FEATURE_IA64	(1 << 30) // IA-64 processor
-#define X86_FEATURE_BIT31 (1 << 31) // (undefined)
+void assist_iret64(Context& ctx) {
+#ifdef PTLSIM_HYPERVISOR
+  //
+  // iretq in 64-bit mode
+  //
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_ar1];
+  ctx.commitarf[REG_flags] = (ctx.commitarf[REG_ar2] & ~(FLAG_IOPL|FLAG_VM)) | (ctx.commitarf[REG_flags] & FLAG_IOPL);
+#else
+  // Only used in full system PTLsim: return to user mode
+  assert(false);
+#endif
+}
 
 //
-// Xen forces us to mask some features (vme, de, pse, pge, sep, mtrr)
-// when returning the CPUID to a guest, since it uses these features itself.
+// Pop the flags from the user mode stack
 //
-#define PTLSIM_X86_FEATURE (\
-  X86_FEATURE_FPU | /*X86_FEATURE_VME | X86_FEATURE_DE | */ X86_FEATURE_PSE | \
-  X86_FEATURE_TSC | X86_FEATURE_MSR | X86_FEATURE_PAE | X86_FEATURE_MCE | \
-  X86_FEATURE_CX8 | X86_FEATURE_APIC | /*X86_FEATURE_BIT10 | X86_FEATURE_SEP | */ \
-  /*X86_FEATURE_MTRR | X86_FEATURE_PGE | */  X86_FEATURE_MCA | X86_FEATURE_CMOV | \
-  X86_FEATURE_PAT | X86_FEATURE_PSE36 | X86_FEATURE_PN | X86_FEATURE_CLFL | \
-  X86_FEATURE_NX | /*X86_FEATURE_DTES | */ X86_FEATURE_ACPI | X86_FEATURE_MMX | \
-  X86_FEATURE_FXSR | X86_FEATURE_XMM | X86_FEATURE_XMM2 | X86_FEATURE_SNOOP | \
-  X86_FEATURE_HT /* | X86_FEATURE_ACC | X86_FEATURE_IA64 | X86_FEATURE_BIT31*/)
-
-//
-// CPUID level 0x00000001, result in %ecx
-//
-#define X86_EXT_FEATURE_XMM3	(1 <<  0) // Streaming SIMD Extensions-3
-#define X86_EXT_FEATURE_MWAIT	(1 <<  3) // Monitor/Mwait support
-#define X86_EXT_FEATURE_DSCPL	(1 <<  4) // CPL Qualified Debug Store
-#define X86_EXT_FEATURE_EST		(1 <<  7) // Enhanced SpeedStep
-#define X86_EXT_FEATURE_TM2		(1 <<  8) // Thermal Monitor 2
-#define X86_EXT_FEATURE_CID		(1 << 10) // Context ID
-#define X86_EXT_FEATURE_CX16	(1 << 13) // CMPXCHG16B
-#define X86_EXT_FEATURE_XTPR	(1 << 14) // Send Task Priority Messages
-
-#define PTLSIM_X86_EXT_FEATURE (\
-  X86_EXT_FEATURE_XMM3 | X86_EXT_FEATURE_CX16)
-
-//
-// CPUID level 0x80000001, result in %edx
-//
-#define X86_VENDOR_FEATURE_SYSCALL  (1 << 11) // SYSCALL/SYSRET
-#define X86_VENDOR_FEATURE_MMXEXT   (1 << 22) // AMD MMX extensions
-#define X86_VENDOR_FEATURE_FXSR_OPT (1 << 25) // FXSR optimizations
-#define X86_VENDOR_FEATURE_RDTSCP   (1 << 27) // RDTSCP instruction
-#define X86_VENDOR_FEATURE_LM       (1 << 29) // Long Mode (x86-64)
-#define X86_VENDOR_FEATURE_3DNOWEXT (1 << 30) // AMD 3DNow! extensions
-#define X86_VENDOR_FEATURE_3DNOW    (1 << 31) // 3DNow!
-
-#define PTLSIM_X86_VENDOR_FEATURE \
-  (X86_VENDOR_FEATURE_FXSR_OPT | X86_VENDOR_FEATURE_LM | (PTLSIM_X86_FEATURE & 0x1ffffff))
-
-//
-// CPUID level 0x80000001, result in %ecx
-//
-#define X86_VENDOR_EXT_FEATURE_LAHF_LM    (1 << 0) // LAHF/SAHF in long mode
-#define X86_VENDOR_EXT_FEATURE_CMP_LEGACY (1 << 1) // If yes HyperThreading not valid
-#define X86_VENDOR_EXT_FEATURE_SVM        (1 << 2) // Secure Virtual Machine extensions
-
-//
-// Make sure we do NOT define CMP_LEGACY since PTLsim may have multiple threads
-// per core enabled and the guest OS must optimize cache coherency as such.
-//
-#define PTLSIM_X86_VENDOR_EXT_FEATURE (X86_VENDOR_EXT_FEATURE_LAHF_LM)
-
-union ProcessorModelInfo {
-  struct { W32 stepping:4, model:4, family:4, reserved1:4, extmodel:4, extfamily:8, reserved2:4; } fields;
-  W32 data;
-};
-
-union ProcessorMiscInfo {
-  struct { W32 brandid:8, clflush:8, reserved:8, apicid:8; } fields;
-  W32 data;
-};
-
-#define PTLSIM_X86_MODEL_INFO (\
-  (0  << 0) /* stepping */ | \
-  (0  << 4) /* model */ | \
-  (15 << 8) /* family */ | \
-  (0  << 12) /* reserved1 */ | \
-  (0  << 16) /* extmodel */ | \
-  (0  << 20) /* extfamily */ | \
-  (0  << 24))
-
-#define PTLSIM_X86_MISC_INFO (\
-  (0  << 0) /* brandid */ | \
-  (8  << 8) /* line size (8 x 8 = 64) */ | \
-  (0 << 16) /* reserved */ | \
-  (0 << 24)) /* APIC ID (must be patched later!) */
+void assist_popf(Context& ctx) {
+  static const W64 FLAG_USER_MODIFIABLE = (FLAG_CF|FLAG_PF|FLAG_AF|FLAG_ZF|FLAG_SF|FLAG_TF|FLAG_DF|FLAG_OF|FLAG_NT|FLAG_AC|FLAG_ID);
+  W64 flags = ctx.commitarf[REG_ar1];
+  ctx.commitarf[REG_flags] = (ctx.commitarf[REG_flags] & ~FLAG_USER_MODIFIABLE) | (flags & FLAG_USER_MODIFIABLE);
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+}
 
 void assist_cpuid(Context& ctx) {
-  W64& rax = ctx.commitarf[REG_rax];
-  W64& rbx = ctx.commitarf[REG_rbx];
-  W64& rcx = ctx.commitarf[REG_rcx];
-  W64& rdx = ctx.commitarf[REG_rdx];
+  W32 eax, ebx, ecx, edx;
+  W32 op = ctx.commitarf[REG_rax];
+  W32 count = ctx.commitarf[REG_rcx];
 
-  W32 func = rax;
-  if (logable(4)) {
-    logfile << "assist_cpuid: func 0x", hexstring(func, 32), " called from ",
-      (void*)(Waddr)ctx.commitarf[REG_selfrip], ":", endl;
-  }
+  // Use the cpuid function from globals.h (portable)
+  cpuid(op, eax, ebx, ecx, edx);
 
-  switch (func) {
-  case 0: {
-    // Max avail function spec and vendor ID:
-    const W32* vendor = (const W32*)&cpuid_vendor;
-    rax = 2; // two extended function
-    rbx = vendor[0];
-    rdx = vendor[1];
-    rcx = vendor[2];
-    break;
-  }
-
-  case 1: {
-    // Model and capability information
-    rax = PTLSIM_X86_MODEL_INFO; // model
-    rbx = PTLSIM_X86_MISC_INFO | (ctx.vcpuid << 24);
-    rcx = PTLSIM_X86_EXT_FEATURE;
-    rdx = PTLSIM_X86_FEATURE;
-    break;
-  }
-
-  case 2: {
-    // Dummy cache informations, required by glibc
-    rax = 0; // TODO
-    rbx = 0;
-    rcx = 0;
-    rdx = 0;
-    break;
-  }
-
-  case 0x80000000: {
-    // Max avail extended function spec and vendor ID:
-    const W32* vendor = (const W32*)&cpuid_vendor;
-    rax = 4;
-    rbx = vendor[0];
-    rdx = vendor[1];
-    rcx = vendor[2];
-    break;
-  }
-
-  case 0x80000001: {
-    // extended feature info
-    rax = PTLSIM_X86_MODEL_INFO;
-    rbx = 0; // brand ID
-    rcx = PTLSIM_X86_VENDOR_EXT_FEATURE;
-    rdx = PTLSIM_X86_VENDOR_FEATURE;
-    break;
-  }
-
-  case 0x80000002 ... 0x80000004: {
-    // processor name string
-    const W32* cpudesc = (const W32*)(&cpuid_description[(func - 0x80000002)*16]);
-    rax = cpudesc[0];
-    rbx = cpudesc[1];
-    rcx = cpudesc[2];
-    rdx = cpudesc[3];
-    break;
-  }
-
-  default: {
-    W32 eax, ebx, ecx, edx;
-    cpuid(func, eax, ebx, ecx, edx);
-    rax = eax;
-    rbx = ebx;
-    rcx = ecx;
-    rdx = edx;
-    break;
-  }
-  }
-
+  ctx.commitarf[REG_rax] = eax;
+  ctx.commitarf[REG_rbx] = ebx;
+  ctx.commitarf[REG_rcx] = ecx;
+  ctx.commitarf[REG_rdx] = edx;
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+}
+
+void assist_sti(Context& ctx) {
+#ifdef PTLSIM_HYPERVISOR
+  ctx.internal_eflags |= FLAG_IF;
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+#else
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+#endif
+}
+
+void assist_cli(Context& ctx) {
+#ifdef PTLSIM_HYPERVISOR
+  ctx.internal_eflags &= ~FLAG_IF;
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+#else
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+#endif
 }
 
 void assist_rdtsc(Context& ctx) {
@@ -337,24 +262,6 @@ void assist_rdtsc(Context& ctx) {
   rdx = HI32(tsc);
 
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
-}
-
-//
-// Pop from stack into flags register, with checking for reserved bits
-//
-void assist_popf(Context& ctx) {
-  W32 flags = ctx.commitarf[REG_ar1];
-  // bit 1 is always '1', and bits {3, 5, 15} are always '0':
-  flags = (flags | (1 << 1)) & (~((1 << 3) | (1 << 5) | (1 << 15)));
-  ctx.internal_eflags = flags & ~(FLAG_ZAPS|FLAG_CF|FLAG_OF);
-  ctx.commitarf[REG_flags] = flags & (FLAG_ZAPS|FLAG_CF|FLAG_OF);
-  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
-
-  // Update internal flags too (only update non-standard flags in internal_flags_bits):
-  // Equivalent to these uops:
-  // this << TransOp(OP_and, REG_temp1, REG_temp0, REG_imm, REG_zero, 2, ~(FLAG_ZAPS|FLAG_CF|FLAG_OF));
-  // TransOp stp(OP_st, REG_mem, REG_ctx, REG_imm, REG_temp1, 2, offsetof(Context, internal_eflags)); stp.internal = 1; this << stp;
-  // this << TransOp(OP_movrcc, REG_temp0, REG_zero, REG_temp0, REG_zero, 3, 0, 0, FLAGS_DEFAULT_ALU);
 }
 
 //
@@ -377,421 +284,182 @@ void assist_std(Context& ctx) {
 extern void assist_ptlcall(Context& ctx);
 
 void assist_write_segreg(Context& ctx) {
-  W16 selector = ctx.commitarf[REG_ar1];
-  byte segid = ctx.commitarf[REG_ar2];
-
-  int exception = ctx.write_segreg(segid, selector);
-
-  if unlikely (exception) {
-    ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
-    ctx.propagate_x86_exception(exception, selector);
-    return;
-  }
-
+  // There's really nothing to do here: the new
+  // value is already in ctx.commitarf[REG_ar1].
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
 }
 
 void assist_ldmxcsr(Context& ctx) {
   //
-  // LDMXCSR needs to flush the pipeline since future FP instructions will
-  // depend on its value and can't be issued out of order w.r.t the mxcsr.
+  // LDMXCSR needs to flush the pipeline since future
+  // FP instructions will use its value, and any
+  // speculatively executed prior FP instructions might
+  // have been resolved under an old MXCSR.
   //
-  W32 mxcsr = (W32)ctx.commitarf[REG_ar1];
-
-  // Top bit of mxcsr archreg doubles as direction flag and other misc flags: preserve it
-  ctx.mxcsr = (ctx.mxcsr & 0xffffffff00000000ULL) | mxcsr;
-
-  // We can't have exceptions going on inside PTLsim: virtualize this feature in uopimpl code
-  // Everything else will be used by real SSE insns inside uopimpls.
-  mxcsr |= MXCSR_EXCEPTION_DISABLE_MASK;
-  x86_set_mxcsr(mxcsr);
-
+  // This works because LDMXCSR is an exception-generating
+  // assist anyway, so it acts as a barrier.
   //
-  // Technically all FP uops should update the sticky exception bits in the mxcsr
-  // if marked as such (i.e. non-x87). Presently we don't do this, so hopefully
-  // no code checks for exception conditions in this manner. Otherwise each FP
-  // uopimpl would need to update a speculative version of the mxcsr.
-  //
+  W32 mxcsr = ctx.commitarf[REG_ar1];
+  ctx.mxcsr = mxcsr;
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
 }
 
 void assist_fxsave(Context& ctx) {
+  Waddr target = ctx.commitarf[REG_ar1];
+#ifdef PTLSIM_HYPERVISOR
+  ctx.fxsave(*(FXSAVEStruct*)target);
+#else
   FXSAVEStruct state;
-
   ctx.fxsave(state);
-
-  Waddr target = ctx.commitarf[REG_ar1] & ctx.virt_addr_mask;
-
   PageFaultErrorCode pfec;
   Waddr faultaddr;
   int bytes = ctx.copy_to_user(target, &state, sizeof(state), pfec, faultaddr);
-
-  if (bytes < sizeof(state)) {
-    ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
-    ctx.propagate_x86_exception(EXCEPTION_x86_page_fault, pfec, faultaddr);
-    return;
-  }
+  assert(bytes == sizeof(state));
+#endif
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
 }
 
 void assist_fxrstor(Context& ctx) {
+  Waddr target = ctx.commitarf[REG_ar1];
+#ifdef PTLSIM_HYPERVISOR
+  ctx.fxrstor(*(FXSAVEStruct*)target);
+#else
   FXSAVEStruct state;
-
-  Waddr target = ctx.commitarf[REG_ar1] & ctx.virt_addr_mask;
-
   PageFaultErrorCode pfec;
   Waddr faultaddr;
   int bytes = ctx.copy_from_user(&state, target, sizeof(state), pfec, faultaddr);
-
-  if (bytes < sizeof(state)) {
-    ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
-    ctx.propagate_x86_exception(EXCEPTION_x86_page_fault, pfec, faultaddr);
-    return;
-  }
-
+  assert(bytes == sizeof(state));
   ctx.fxrstor(state);
-
-  // We can't have exceptions going on inside PTLsim: virtualize this feature in uopimpl code
-  // Everything else will be used by real SSE insns inside uopimpls.
-  W32 mxcsr = ctx.mxcsr | MXCSR_EXCEPTION_DISABLE_MASK;
-  x86_set_mxcsr(mxcsr);
-
+#endif
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
 }
 
 void assist_wrmsr(Context& ctx) {
-  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
-
 #ifdef PTLSIM_HYPERVISOR
-  if (ctx.kernel_mode) {
-    W64 value = (ctx.commitarf[REG_rdx] << 32) | LO32(ctx.commitarf[REG_rax]);
-    W32 msr = ctx.commitarf[REG_rcx];
-    bool invalid = 0;
-    switch (msr) {
-    case 0xc0000100:
-      ctx.seg[SEGID_FS].base = value; break;
-    case 0xc0000101:
-      ctx.seg[SEGID_GS].base = value; break;
-    case 0xc0000102:
-      ctx.swapgs_base = value; break;
-    default:
-      invalid = 1; break;
-    }
-    if (invalid) {
-      logfile << "Warning: wrmsr: invalid MSR write (msr  ", (void*)(Waddr)msr,
-        ") with value ", (void*)(Waddr)value, " from rip ",
-        (void*)(Waddr)ctx.commitarf[REG_rip], endl;
-      // Invalid MSR writes are ignored by Xen by default
-      // ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
-    } else {
-      ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
-    }
-  } else {
-    ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+  W64 msr = ctx.commitarf[REG_rcx];
+  W64 value = (ctx.commitarf[REG_rdx] << 32) | LO32(ctx.commitarf[REG_rax]);
+
+  switch (msr) {
+  case 0xc0000100: // fs_base
+    ctx.seg[SEGID_FS].base = value;
+    break;
+  case 0xc0000101: // gs_base (swapgs base)
+    ctx.seg[SEGID_GS].base = value;
+    break;
+  case 0xc0000102: // kernel_gs_base (regular user base)
+    ctx.swapgs_base = value;
+    break;
+  default:
+    logfile << "Unknown MSR write: msr 0x", hexstring(msr, 32), " = 0x", hexstring(value, 64), endl;
+    break;
   }
 #else
-  ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
+  cerr << "Warning: wrmsr assist not supported outside of PTLSIM_HYPERVISOR", endl;
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
 #endif
 }
-
 
 void assist_rdmsr(Context& ctx) {
-  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
-
 #ifdef PTLSIM_HYPERVISOR
-  if (ctx.kernel_mode) {
-    W32 msr = ctx.commitarf[REG_rcx];
-    W64 rc = 0;
-    bool invalid = 0;
-    switch (msr) {
-    case 0xc0000100:
-      rc = ctx.seg[SEGID_FS].base; break;
-    case 0xc0000101:
-      rc = ctx.seg[SEGID_GS].base; break;
-    case 0xc0000102:
-      rc = ctx.swapgs_base; break;
-    case 0xc0000080:
-      rc = ctx.efer; break;
-    default:
-      invalid = 1; break;
-    }
-    if (invalid) {
-      ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
-    } else {
-      ctx.commitarf[REG_rdx] = HI32(rc);
-      ctx.commitarf[REG_rax] = LO32(rc);
-      ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
-    }
-  } else {
-    ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+  W64 msr = ctx.commitarf[REG_rcx];
+  W64 value = 0;
+
+  switch (msr) {
+  case 0xc0000100: // fs_base
+    value = ctx.seg[SEGID_FS].base;
+    break;
+  case 0xc0000101: // gs_base (swapgs base)
+    value = ctx.seg[SEGID_GS].base;
+    break;
+  case 0xc0000102: // kernel_gs_base (regular user base)
+    value = ctx.swapgs_base;
+    break;
+  default:
+    logfile << "Unknown MSR read: msr 0x", hexstring(msr, 32), endl;
+    break;
   }
+
+  ctx.commitarf[REG_rdx] = HI32(value);
+  ctx.commitarf[REG_rax] = LO32(value);
 #else
-  ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
+  cerr << "Warning: rdmsr assist not supported outside of PTLSIM_HYPERVISOR", endl;
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
 #endif
 }
 
-#ifdef PTLSIM_HYPERVISOR
 void assist_write_cr0(Context& ctx) {
-  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
-
-  if (!ctx.kernel_mode) {
-    ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
-    return;
-  }
-
-  W64 val = ctx.commitarf[REG_ar1];
-
-  if ((val ^ ctx.cr0) & ~(X86_CR0_TS)) {
-    // Only allowed to change TS flag
-    ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
-    return;
-  }
-
-  ctx.cr0 = val;
-
+#ifdef PTLSIM_HYPERVISOR
+  ctx.cr0 = ctx.commitarf[REG_ar1];
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+#else
+  // No CR0 in userspace
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+#endif
 }
 
 void assist_write_cr2(Context& ctx) {
-  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
-
-  if (!ctx.kernel_mode) {
-    ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
-    return;
-  }
-
-  W64 val = ctx.commitarf[REG_ar1];
-  sshinfo.vcpu_info[ctx.vcpuid].arch.cr2 = val;
-  ctx.cr2 = val;
+#ifdef PTLSIM_HYPERVISOR
+  ctx.cr2 = ctx.commitarf[REG_ar1];
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+#else
+  // No CR2 in userspace
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+#endif
 }
 
-void switch_page_table(mfn_t mfn);
-
 void assist_write_cr3(Context& ctx) {
-  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
-
-  if (!ctx.kernel_mode) {
-    ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
-    return;
-  }
-
-  ctx.cr3 = ctx.commitarf[REG_ar1] & 0xfffffffffffff000ULL;
-  ctx.flush_tlb();
-  switch_page_table(ctx.cr3 >> 12);
+#ifdef PTLSIM_HYPERVISOR
+  ctx.cr3 = ctx.commitarf[REG_ar1];
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+#else
+  // No CR3 in userspace
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+#endif
 }
 
 void assist_write_cr4(Context& ctx) {
-  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
-
-  if (!ctx.kernel_mode) {
-    ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
-    return;
-  }
-
-  // (Ignore all writes to CR4 under Xen)
-
+#ifdef PTLSIM_HYPERVISOR
+  ctx.cr4 = ctx.commitarf[REG_ar1];
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+#else
+  // No CR4 in userspace
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+#endif
 }
 
 void assist_write_debug_reg(Context& ctx) {
-  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
-
-  if (!ctx.kernel_mode) {
-    ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
-    return;
-  }
-
+#ifdef PTLSIM_HYPERVISOR
+  int reg = ctx.commitarf[REG_ar2];
   W64 value = ctx.commitarf[REG_ar1];
-  W64 regid = ctx.commitarf[REG_ar2];
-
-  switch (regid) {
-  case 0: ctx.dr0 = value; break;
-  case 1: ctx.dr1 = value; break;
-  case 2: ctx.dr2 = value; break;
-  case 3: ctx.dr3 = value; break;
-  case 4: ctx.dr4 = value; break;
-  case 5: ctx.dr5 = value; break;
-  case 6: ctx.dr6 = value; break;
-  case 7: ctx.dr7 = value; break;
-  };
-
+  ctx.dr[reg] = value;
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
-}
-
 #else
-//
-// Userspace PTLsim does not support these:
-//
-void assist_write_cr0(Context& ctx) {
-  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
-  ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
-}
-
-void assist_write_cr2(Context& ctx) {
-  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
-  ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
-}
-
-void assist_write_cr3(Context& ctx) {
-  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
-  ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
-}
-
-void assist_write_cr4(Context& ctx) {
-  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
-  ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
-}
-
-void assist_write_debug_reg(Context& ctx) {
-  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
-  ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
-}
-#endif
-
-void assist_iret16(Context& ctx) {
-  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
-  ctx.propagate_x86_exception(EXCEPTION_x86_invalid_opcode);
-}
-
-void assist_iret32(Context& ctx) {
-  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
-  ctx.propagate_x86_exception(EXCEPTION_x86_invalid_opcode);
-}
-
-extern bool force_synchronous_streams;
-
-struct IRETStackFrame {
-  W64 rip, cs, rflags, rsp, ss;
-};
-
-static inline ostream& operator <<(ostream& os, const IRETStackFrame& iretctx) {
-  os << "cs:rip ", (void*)iretctx.cs, ":", (void*)iretctx.rip,
-    ", ss:rsp ", (void*)iretctx.ss, ":", (void*)iretctx.rsp,
-    ", rflags ", (void*)iretctx.rflags;
-  return os;
-}
-
-void assist_iret64(Context& ctx) {
-#ifdef PTLSIM_HYPERVISOR
-  IRETStackFrame frame;
-
-  PageFaultErrorCode pfec;
-  Waddr faultaddr;
-
-  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
-
-  int n = ctx.copy_from_user(&frame, (Waddr)ctx.commitarf[REG_rsp], sizeof(frame), pfec, faultaddr);
-  if unlikely (n != sizeof(frame)) {
-    ctx.propagate_x86_exception(EXCEPTION_x86_page_fault, pfec, faultaddr);
-    return;
-  }
-
-  int exception;
-
-  if unlikely (exception = ctx.write_segreg(SEGID_SS, frame.ss)) {
-    ctx.propagate_x86_exception(exception, frame.ss & 0xfff8);
-    return;
-  }
-
-  if unlikely (exception = ctx.write_segreg(SEGID_CS, frame.cs)) {
-    ctx.propagate_x86_exception(exception, frame.cs & 0xfff8);
-    return;
-  }
-
-  if (logable(5)) {
-    logfile << "IRET64 from rip ", (void*)(Waddr)ctx.commitarf[REG_rip], ": iretctx @ ",
-      (void*)(Waddr)ctx.commitarf[REG_rsp], " = ", frame, " (", sim_cycle, " cycles, ",
-      total_user_insns_committed, " commits)", endl;
-  }
-
-  ctx.commitarf[REG_rip] = frame.rip;
-  ctx.commitarf[REG_rsp] = frame.rsp;
-  ctx.internal_eflags = frame.rflags & ~(FLAG_ZAPS|FLAG_CF|FLAG_OF);
-  ctx.commitarf[REG_flags] = frame.rflags & (FLAG_ZAPS|FLAG_CF|FLAG_OF);
-#else
-  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
-  ctx.propagate_x86_exception(EXCEPTION_x86_invalid_opcode);
+  // No debug registers in userspace
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
 #endif
 }
 
-static inline W64 x86_merge(W64 rd, W64 ra, int sizeshift) {
-  union {
-    W8 w8;
-    W16 w16;
-    W32 w32;
-    W64 w64;
-  } sizes;
-
-  switch (sizeshift) {
-  case 0: sizes.w64 = rd; sizes.w8 = ra; return sizes.w64;
-  case 1: sizes.w64 = rd; sizes.w16 = ra; return sizes.w64;
-  case 2: return LO32(ra);
-  case 3: return ra;
-  }
-
-  return rd;
-}
-
-#ifdef PTLSIM_HYPERVISOR
 void assist_ioport_in(Context& ctx) {
-  // ar1 = 16-bit port number
-  // ar2 = sizeshift
-  // rax = output
-
-  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
-
-  if (!ctx.kernel_mode) {
-    ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
-    return;
-  }
-
-  W64 port = ctx.commitarf[REG_ar1];
-  W64 sizeshift = ctx.commitarf[REG_ar2];
-  W64 value = x86_merge(ctx.commitarf[REG_rax], 0xffffffffffffffffULL, sizeshift);
-
-  logfile << "assist_ioport_in from rip ", (void*)(Waddr)ctx.commitarf[REG_selfrip], "): ",
-    "in port 0x", hexstring(port, 16), " (size ", (1<<sizeshift), " bytes) => 0x",
-    hexstring(value, 64), endl;
-
-  ctx.commitarf[REG_rax] = value;
+#ifdef PTLSIM_HYPERVISOR
+  // In hypervisor mode, I/O ports would be handled differently
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+#else
+  // No I/O ports in userspace
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
+#endif
 }
 
 void assist_ioport_out(Context& ctx) {
-  // ar1 = 16-bit port number
-  // ar2 = sizeshift
-  // rax = value to write
-
-  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
-
-  if (!ctx.kernel_mode) {
-    ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
-    return;
-  }
-
-  W64 port = ctx.commitarf[REG_ar1];
-  W64 sizeshift = ctx.commitarf[REG_ar2];
-  W64 value = x86_merge(0, ctx.commitarf[REG_rax], sizeshift);
-
-  logfile << "assist_ioport_out from rip ", (void*)(Waddr)ctx.commitarf[REG_selfrip], "): ",
-    "out port 0x", hexstring(port, 16), " (size ", (1<<sizeshift), " bytes) <= 0x",
-    hexstring(value, 64), endl;
-
+#ifdef PTLSIM_HYPERVISOR
+  // In hypervisor mode, I/O ports would be handled differently
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
-}
 #else
-void assist_ioport_in(Context& ctx) {
-  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
-  ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
-}
-
-void assist_ioport_out(Context& ctx) {
-  ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
-  ctx.propagate_x86_exception(EXCEPTION_x86_gp_fault);
-}
+  // No I/O ports in userspace
+  ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
 #endif
+}
 
 bool TraceDecoder::decode_complex() {
   DecodedOperand rd;
