@@ -25,8 +25,6 @@
 // void print_sysinfo(ostream& os);
 // int inject_events();
 
-// void assist_ptlcall(Context& ctx);
-
 extern bool asp_check_exec(void* addr);
 
 extern bool smc_isdirty(Waddr mfn);
@@ -52,8 +50,5 @@ void handle_syscall_32bit(int semantics);
 
 // x86-64 mode has only one type of system call (the syscall instruction)
 void handle_syscall_64bit();
-
-// Used to determine whether to exit emulation.
-extern bool requested_switch_to_native;
 
 #endif // _PTLSIM_API_H_

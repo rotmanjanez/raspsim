@@ -87,7 +87,6 @@ const assist_func_t assistid_to_func[ASSIST_COUNT] = {
   assist_int,
   assist_syscall,
   assist_hypercall,
-  assist_ptlcall,
   assist_sysenter,
   assist_iret16,
   assist_iret32,

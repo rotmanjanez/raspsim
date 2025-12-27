@@ -960,12 +960,6 @@ bool ThreadContext::handle_barrier() {
   // Flush again, but restart at possibly modified rip
   flush_pipeline();
 
-#ifndef PTLSIM_HYPERVISOR
-  if (requested_switch_to_native) {
-    logfile << "PTL call requested switch to native mode at rip ", (void*)(Waddr)ctx.commitarf[REG_rip], endl;
-    return false;
-  }
-#endif
   return true;
 }
 

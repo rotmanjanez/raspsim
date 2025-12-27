@@ -87,20 +87,12 @@ void PTLsimConfig::reset() {
   realtime = 0;
   mask_interrupts = 0;
   console_mfn = 0;
-  pause = 0;
-  perfctr_name.reset();
-  force_native = 0;
 #endif
 
   perfect_cache = 0;
   static_branchpred = 0;
 
   bbcache_dump_filename.reset();
-
-#ifndef PTLSIM_HYPERVISOR
-  sequential_mode_insns = 0;
-  exit_after_fullsim = 0;
-#endif
 }
 
 template <>
@@ -113,10 +105,8 @@ void ConfigurationParser<PTLsimConfig>::setup() {
   section("Action (specify only one)");
   add(run,                          "run",                  "Run under simulation");
   add(stop,                         "stop",                 "Stop current simulation run and wait for command");
-  add(native,                       "native",               "Switch to native mode");
   add(kill,                         "kill",                 "Kill PTLsim inside domain (and ptlmon), then shutdown domain");
   add(flush_command_queue,          "flush",                "Flush all queued commands, stop the current simulation run and wait");
-  add(simswitch,                    "switch",               "Switch back to PTLsim while in native mode");
 #endif
 
   section("Simulation Control");
@@ -173,9 +163,6 @@ void ConfigurationParser<PTLsimConfig>::setup() {
   add(realtime,                     "realtime",             "Operate in real time: no time dilation (not accurate for I/O intensive workloads!)");
   add(mask_interrupts,              "maskints",             "Mask all interrupts (required for guaranteed deterministic behavior)");
   add(console_mfn,                  "console-mfn",          "Track the specified Xen console MFN");
-  add(pause,                        "pause",                "Pause domain after using -native");
-  add(perfctr_name,                 "perfctr",              "Performance counter generic name for hardware profiling during native mode");
-  add(force_native,                 "force-native",         "Force native mode: ignore attempts to switch to simulation");
 #endif
 
   section("Out of Order Core (ooocore)");
@@ -183,11 +170,6 @@ void ConfigurationParser<PTLsimConfig>::setup() {
 
   section("Miscellaneous");
   add(bbcache_dump_filename,        "bbdump",               "Basic block cache dump filename");
-#ifndef PTLSIM_HYPERVISOR
-  // Userspace only
-  add(sequential_mode_insns,        "seq",                  "Run in sequential mode for <seq> instructions before switching to out of order");
-  add(exit_after_fullsim,           "exitend",              "Kill the thread after full simulation completes rather than going native");
-#endif
 };
 
 #ifndef CONFIG_ONLY

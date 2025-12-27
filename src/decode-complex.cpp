@@ -371,10 +371,6 @@ void assist_std(Context& ctx) {
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
 }
 
-//
-// PTL calls
-//
-extern void assist_ptlcall(Context& ctx);
 
 void assist_write_segreg(Context& ctx) {
   W16 selector = ctx.commitarf[REG_ar1];
@@ -2457,13 +2453,6 @@ bool TraceDecoder::decode_complex() {
     // cpuid: update %rax,%rbx,%rcx,%rdx
     EndOfDecode();
     microcode_assist(ASSIST_CPUID, ripstart, rip);
-    end_of_block = 1;
-    break;
-  }
-
-  case 0x137: { // 0f 37: PTL undocumented opcode
-    EndOfDecode();
-    microcode_assist(ASSIST_PTLCALL, ripstart, rip);
     end_of_block = 1;
     break;
   }

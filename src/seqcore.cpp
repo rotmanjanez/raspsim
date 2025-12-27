@@ -943,12 +943,6 @@ struct SequentialCore {
 
     reset_fetch(ctx.commitarf[REG_rip]);
     external_to_core_state(ctx);
-#ifndef PTLSIM_HYPERVISOR
-    if (requested_switch_to_native) {
-      logfile << "PTL call requested switch to native mode at rip ", (void*)(Waddr)ctx.commitarf[REG_rip], endl;
-      return false;
-    }
-#endif
     return true;
   }
 

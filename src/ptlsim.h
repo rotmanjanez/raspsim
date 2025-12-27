@@ -126,10 +126,8 @@ struct PTLsimConfig {
   W64 domain;
   bool run;
   bool stop;
-  bool native;
   bool kill;
   bool flush_command_queue;
-  bool simswitch;
 #endif
 
   stringbuf core_name;
@@ -182,9 +180,6 @@ struct PTLsimConfig {
   bool realtime;
   bool mask_interrupts;
   W64 console_mfn;
-  bool pause;
-  stringbuf perfctr_name;
-  bool force_native;
 #endif
 
   // Out of order core features
@@ -194,11 +189,6 @@ struct PTLsimConfig {
   // Other info
   stringbuf bbcache_dump_filename;
 
-#ifndef PTLSIM_HYPERVISOR
-  // Simulation Mode
-  W64 sequential_mode_insns;
-  bool exit_after_fullsim;
-#endif
   void reset();
 };
 
