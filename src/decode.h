@@ -311,7 +311,6 @@ enum {
   ASSIST_INT,
   ASSIST_SYSCALL,
   ASSIST_HYPERCALL,
-  ASSIST_PTLCALL,
   ASSIST_SYSENTER,
   ASSIST_IRET16,
   ASSIST_IRET32,
@@ -391,7 +390,6 @@ static const char* assist_names[ASSIST_COUNT] = {
   "int",
   "syscall",
   "hypercall",
-  "ptlcall",
   "sysenter",
   "iret16",
   "iret32",
@@ -463,7 +461,6 @@ void assist_fxrstor(Context& ctx);
 void assist_int(Context& ctx);
 void assist_syscall(Context& ctx);
 void assist_hypercall(Context& ctx);
-void assist_ptlcall(Context& ctx);
 void assist_sysenter(Context& ctx);
 void assist_iret16(Context& ctx);
 void assist_iret32(Context& ctx);

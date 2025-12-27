@@ -769,13 +769,9 @@ void Raspsim::propagate_x86_exception(byte exception, W32 errorcode,
 }
 
 void Raspsim::handle_syscall_32bit(int semantics) {
-    if (semantics == 0 /* SYSCALL_SEMANTICS_INT80 */) {
-        // Our exit operation.
-        requested_switch_to_native = 1;
-    } else {
-        PyRaspsim::X86Exception = {"Syscall not supported"};
-        longjmp(PyRaspsim::simexit, 1);
-    }
+    // All 32-bit syscalls are unsupported in simulator-only mode
+    PyRaspsim::X86Exception = {"Syscall not supported"};
+    longjmp(PyRaspsim::simexit, 1);
 }
 
 void Raspsim::handle_syscall_64bit() {

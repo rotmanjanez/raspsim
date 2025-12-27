@@ -108,13 +108,8 @@ void Raspsim::handle_syscall_32bit(int semantics) {
   // Handle a 32-bit syscall:
   // (This is called from the assist_syscall ucode assist)
   //
-  if (semantics == SYSCALL_SEMANTICS_INT80) {
-    // Our exit operation.
-    requested_switch_to_native = 1;
-  } else {
-    // But don't clobber RAX when we want out guest to quit.
-    ctx.commitarf[REG_rax] = -ENOSYS;
-  }
+  // All 32-bit syscalls are unsupported in simulator-only mode
+  ctx.commitarf[REG_rax] = -ENOSYS;
 
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
 }

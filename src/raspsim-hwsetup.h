@@ -8,7 +8,6 @@ class Context;
 class PTLsimMachine;
 
 extern const char* const syscall_names_64bit[];
-extern bool requested_switch_to_native;
 
 W64 lengthofSyscallNames();
 
