@@ -37,20 +37,10 @@ SVNDATE=unknown
 
 INCFLAGS = -Isrc -DBUILDHOST="`hostname -f`" -DSVNREV="$(SVNREV)" -DSVNDATE="$(SVNDATE)"
 
-ifdef __x86_64__
-CFLAGS = -std=gnu++11 -O2 -fomit-frame-pointer -pipe -march=k8 -fno-builtin-memmove -falign-functions=16 -funroll-loops -funit-at-a-time -minline-all-stringops
-#CFLAGS = -O2 -g3 -march=k8 -falign-functions=16 -minline-all-stringops
-# -O1 doesn't work
-CFLAGS32BIT = $(CFLAGS) -m32
-else
-# 32-bit PTLsim32 only, on a Pentium 4:
-CFLAGS = -m32 -O99 -g -fomit-frame-pointer -march=pentium4 -falign-functions=16
-# No optimizations:
-#CFLAGS = -O1 -g3 -march=pentium4 -mtune=k8 -falign-functions=16
-CFLAGS32BIT = $(CFLAGS)
-endif
-
-CFLAGS += -fno-trapping-math -fno-stack-protector -fno-exceptions -fno-rtti -funroll-loops -mpreferred-stack-boundary=4 -fno-strict-aliasing -fno-stack-protector -Wreturn-type $(GCCVER_SPECIFIC) -D_FORTIFY_SOURCE=0
+# Cross-platform C++23 flags - no architecture-specific optimizations
+CFLAGS = -std=c++23 -O2 -fomit-frame-pointer -pipe -falign-functions=16 -funroll-loops
+CFLAGS += -fno-trapping-math -fno-stack-protector -fno-strict-aliasing -Wreturn-type $(GCCVER_SPECIFIC)
+# Note: Removed -fno-exceptions -fno-rtti for C++23 standard library compatibility
 
 
 
@@ -78,23 +68,22 @@ TOPLEVEL = raspsim
 all: $(TOPLEVEL)
 	@echo "Compiled successfully..."
 
-ifdef __x86_64__
+# Cross-platform build targets (no architecture restrictions)
 raspsim: src/raspsim.o $(OBJS) Makefile
-	$(CXX) $< $(OBJS) -o $@ -Wl,--allow-multiple-definition -static
+	$(CXX) $< $(OBJS) -o $@
 
 PYRASPSIM = pyraspsim/raspsim/core$(shell python3-config --extension-suffix)
 
 $(PYRASPSIM): CFLAGS += -fPIC
 $(PYRASPSIM): pyraspsim/raspsim/pyraspsim.cpp $(OBJS) Makefile
 	@python3 -c "import pybind11" || (echo "pybind11 is not installed. Please install it using 'pip3 install pybind11'"; exit 1)
-	$(CXX) $(INCFLAGS) -O3 -Wall -shared -std=c++11 -fPIC $(shell python3 -m pybind11 --includes) $< -o $@ $(OBJS) -Wl,--allow-multiple-definition
+	$(CXX) $(INCFLAGS) -O3 -Wall -shared -std=c++23 -fPIC $(shell python3 -m pybind11 --includes) $< -o $@ $(OBJS)
 
 pyraspsim/raspsim/core.pyi: $(PYRASPSIM) Makefile
-	@which pybind11-stubgen > /dev/null 2>&1 || (echo "pybind11-stubgen us not installed. Please install it using 'pip install pybind11-stubgen'"; exit 1)
+	@which pybind11-stubgen > /dev/null 2>&1 || (echo "pybind11-stubgen is not installed. Please install it using 'pip install pybind11-stubgen'"; exit 1)
 	cd pyraspsim/raspsim && env PYTHONPATH=. pybind11-stubgen -o . core
 
 pyraspsim: $(PYRASPSIM) pyraspsim/raspsim/core.pyi
-endif
 
 src/%.o: src/%.cpp
 	$(CC) $(CFLAGS) $(INCFLAGS) -o $@ -c $<

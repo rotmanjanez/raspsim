@@ -602,7 +602,7 @@ bool ThreadContext::fetch() {
 
       if unlikely (redirectrip) {
         // follow to target, then end fetching for this cycle if predicted taken
-        bool taken = (predrip != fetchrip);
+        bool taken = (predrip != static_cast<W64>(fetchrip));
         taken_branch_count += taken;
         fetchrip = predrip;
         fetchrip.update(ctx);
@@ -1869,9 +1869,9 @@ int ReorderBufferEntry::commit() {
 
   W64 result = physreg->data;
 
-  assert(ctx.commitarf[REG_rip] == uop.rip);
+  assert(ctx.commitarf[REG_rip] == static_cast<W64>(uop.rip));
 
-  if likely (uop.som) assert(ctx.commitarf[REG_rip] == uop.rip);
+  if likely (uop.som) assert(ctx.commitarf[REG_rip] == static_cast<W64>(uop.rip));
 
   //
   // The commit of all uops in the x86 macro-op is guaranteed to happen after this point
