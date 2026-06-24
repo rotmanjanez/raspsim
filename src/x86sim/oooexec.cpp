@@ -1802,9 +1802,9 @@ void ReorderBufferEntry::replay() {
 
   foreach (operand, MAX_OPERANDS) {
     PhysicalRegister& source_physreg = *operands[operand];
-    ReorderBufferEntry& source_rob = *source_physreg.rob;
 
     if likely (source_physreg.state == PHYSREG_WAITING) {
+      ReorderBufferEntry& source_rob = *source_physreg.rob;
       uopids[operand] = source_rob.get_tag();
       preready[operand] = 0;
       operands_still_needed++;
@@ -1847,9 +1847,9 @@ void ReorderBufferEntry::replay_locked() {
 
   foreach (operand, MAX_OPERANDS) {
     PhysicalRegister& source_physreg = *operands[operand];
-    ReorderBufferEntry& source_rob = *source_physreg.rob;
 
     if likely (source_physreg.state == PHYSREG_WAITING) {
+      ReorderBufferEntry& source_rob = *source_physreg.rob;
       uopids[operand] = source_rob.get_tag();
       preready[operand] = 0;
       operands_still_needed++;

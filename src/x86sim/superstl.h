@@ -1146,7 +1146,8 @@ struct formatter<x86sim::superstl::hexstring> {
 
   auto format(const x86sim::superstl::hexstring& hs, format_context& ctx) const {
     int n = (hs.n + 3) / 4;
-    return format_to(ctx.out(), "{:0{}x}", hs.value & ((1ULL << hs.n) - 1), n);
+    const x86sim::W64 mask = (hs.n >= 64) ? ~0ULL : ((1ULL << hs.n) - 1);
+    return format_to(ctx.out(), "{:0{}x}", hs.value & mask, n);
   }
 };
 

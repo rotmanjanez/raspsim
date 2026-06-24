@@ -160,6 +160,7 @@ void split_unaligned(const TransOp& transop, TransOpBuffer& buf) {
   lo.rbimm = 0;
   lo.cond = LDST_ALIGN_LO;
   lo.unaligned = 0;
+  lo.som = 0;
   lo.eom = 0;
   buf.synthops[idx] = {}; // loads and stores are not synthesized
 

@@ -1869,8 +1869,10 @@ int ReorderBufferEntry::commit() {
      */
     asp.setdirty(lsq->smc_mfn);
 
-    if (lsq->bytemask)
-      assert(core.caches.commitstore(*lsq, thread.threadid) == 0);
+    if (lsq->bytemask) {
+      W64 store_status = core.caches.commitstore(*lsq, thread.threadid);
+      assert(store_status == 0);
+    }
   }
 
   if unlikely (pteupdate) {
