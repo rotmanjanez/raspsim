@@ -172,15 +172,16 @@ void LoadFillReqQueue<size>::clock() {
     int idx = lsb(ready);
     LoadFillReq& req = reqs[idx];
 
-    logging::println(logging::DEBUG, "[vcpu {}] at cycle {}: wakeup LFRQ slot {}", req.lsi.threadid, machine.sim_cycle, idx);
+    logging::println(logging::DEBUG, "[vcpu {}] at cycle {}: wakeup LFRQ slot {}", req.lsi.threadid, machine.sim_cycle,
+                     idx);
 
     W64 delta = LO32(machine.sim_cycle) - LO32(req.initcycle);
     if unlikely (delta >= 65536) {
       // avoid overflow induced erroneous values:
       logging::println(
           logging::WARNING,
-          "LFRQ: warning: cycle counter wraparound in initcycle latency (current {} vs init {} = delta {})", machine.sim_cycle,
-          req.initcycle, delta);
+          "LFRQ: warning: cycle counter wraparound in initcycle latency (current {} vs init {} = delta {})",
+          machine.sim_cycle, req.initcycle, delta);
     } else {
       stats.dcache.lfrq.total_latency += delta;
     }
@@ -214,7 +215,7 @@ LoadFillReq::LoadFillReq(W64 addr, W64 data, byte mask, LoadStoreInfo lsi, W64 i
 } // namespace x86sim
 
 auto std::formatter<x86sim::CacheSubsystem::LoadFillReq>::format(const x86sim::CacheSubsystem::LoadFillReq& req,
-                                                         std::format_context& ctx) const {
+                                                                 std::format_context& ctx) const {
   using namespace x86sim;
   auto out = ctx.out();
   out = std::format_to(out, "0x{:016x} @ {} -> rob {} @ t{}", req.data, (void*)(Waddr)req.addr, req.lsi.rob,
@@ -550,7 +551,8 @@ auto std::formatter<std::pair<x86sim::CacheSubsystem::CacheLine<linesize>, x86si
 
 template<int linesize>
 auto std::formatter<std::pair<x86sim::CacheSubsystem::CacheLineWithValidMask<linesize>, x86sim::W64>>::format(
-    const std::pair<x86sim::CacheSubsystem::CacheLineWithValidMask<linesize>, x86sim::W64>& p, std::format_context& ctx) const {
+    const std::pair<x86sim::CacheSubsystem::CacheLineWithValidMask<linesize>, x86sim::W64>& p,
+    std::format_context& ctx) const {
   using namespace x86sim;
   auto out = ctx.out();
   const x86sim::byte* data = (const x86sim::byte*)&p.first;
@@ -645,7 +647,8 @@ int CacheHierarchy::issueload_slowpath(Waddr physaddr, SFR& sfra, LoadStoreInfo 
 
   if unlikely (lfrqslot < 0) {
     logging::println(logging::DEBUG,
-                     "iteration {}: LFRQ or MB has no free entries for L2->L1: forcing LFRQFull exception", machine.iterations);
+                     "iteration {}: LFRQ or MB has no free entries for L2->L1: forcing LFRQFull exception",
+                     machine.iterations);
     stoptimer(load_slowpath_timer);
     return -1;
   }
@@ -851,7 +854,7 @@ void CacheHierarchy::reset() {
 } // namespace x86sim
 
 auto std::formatter<x86sim::CacheSubsystem::CacheHierarchy>::format(const x86sim::CacheSubsystem::CacheHierarchy& ch,
-                                                            std::format_context& ctx) const {
+                                                                    std::format_context& ctx) const {
   using namespace x86sim;
   auto out = ctx.out();
   out = std::format_to(out, "Data Cache Subsystem:\n");

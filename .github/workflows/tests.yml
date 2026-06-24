@@ -1,0 +1,86 @@
+name: Tests
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+# These runs are long. Cancel superseded runs on the same ref so the
+# self-hosted runners are not tied up by stale commits.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Gate 0: style. Cheap, so it fails fast before any runner time is spent
+  # building or simulating.
+  # ---------------------------------------------------------------------------
+  format:
+    name: clang-format
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check formatting
+        run: tools/clang-format.sh check
+
+  # ---------------------------------------------------------------------------
+  # Gate 1: quick smoke per core (extraquick suite). Individual jobs so each
+  # core reports separately and can land on its own runner.
+  # ---------------------------------------------------------------------------
+  quick-seq:
+    name: Quick (seq)
+    needs: format
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake --preset release -DSQLITE_TEST_SUITE=extraquick -DSQLITE_TEST_CORES=seq
+      - name: Build
+        run: cmake --build --preset release --target x86sim-linux
+      - name: Test (seq, extraquick)
+        run: ctest --test-dir build/release -L seq --output-on-failure -j "$(nproc)"
+
+  quick-ooo:
+    name: Quick (ooo)
+    needs: format
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake --preset release -DSQLITE_TEST_SUITE=extraquick -DSQLITE_TEST_CORES=ooo
+      - name: Build
+        run: cmake --build --preset release --target x86sim-linux
+      - name: Test (ooo, extraquick)
+        run: ctest --test-dir build/release -L ooo --output-on-failure -j "$(nproc)"
+
+  # ---------------------------------------------------------------------------
+  # Gate 2: full suite per core. Only runs if BOTH quick jobs passed, so we
+  # never spend the (very long) full run on a build that fails the smoke test.
+  # ---------------------------------------------------------------------------
+  full-seq:
+    name: Full (seq)
+    needs: [quick-seq, quick-ooo]
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake --preset release -DSQLITE_TEST_SUITE=all -DSQLITE_TEST_CORES=seq
+      - name: Build
+        run: cmake --build --preset release --target x86sim-linux
+      - name: Test (seq, full)
+        run: ctest --test-dir build/release -L seq --output-on-failure -j "$(nproc)"
+
+  full-ooo:
+    name: Full (ooo)
+    needs: [quick-seq, quick-ooo]
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake --preset release -DSQLITE_TEST_SUITE=all -DSQLITE_TEST_CORES=ooo
+      - name: Build
+        run: cmake --build --preset release --target x86sim-linux
+      - name: Test (ooo, full)
+        run: ctest --test-dir build/release -L ooo --output-on-failure -j "$(nproc)"

@@ -86,8 +86,9 @@ struct ispointer_t<T*> {
 // not standard-layout C++ types, so Clang warns at every expansion site.
 #if defined(__clang__)
 #define offsetof_(T, field)                                                                                            \
-  _Pragma("clang diagnostic push") _Pragma("clang diagnostic ignored \"-Winvalid-offsetof\"") static_cast<Waddr>(     \
-      __builtin_offsetof(T, field)) _Pragma("clang diagnostic pop")
+  _Pragma("clang diagnostic push")                                                                                     \
+      _Pragma("clang diagnostic ignored \"-Winvalid-offsetof\"") static_cast<Waddr>(__builtin_offsetof(T, field))      \
+          _Pragma("clang diagnostic pop")
 #else
 #define offsetof_(T, field) static_cast<Waddr>(__builtin_offsetof(T, field))
 #endif

@@ -314,15 +314,9 @@ struct TraceDecoder {
     byteoffset += 1;
     return r;
   }
-  inline W16 fetch2() {
-    return static_cast<W16>(fetch(2));
-  }
-  inline W32 fetch4() {
-    return static_cast<W32>(fetch(4));
-  }
-  inline W64 fetch8() {
-    return fetch(8);
-  }
+  inline W16 fetch2() { return static_cast<W16>(fetch(2)); }
+  inline W32 fetch4() { return static_cast<W32>(fetch(4)); }
+  inline W64 fetch8() { return fetch(8); }
 
   bool invalidate();
   bool decode_fast();

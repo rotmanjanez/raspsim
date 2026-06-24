@@ -675,8 +675,8 @@ void OutOfOrderCore::print_smt_state() {
 
 } // namespace x86sim
 
-auto std::formatter<x86sim::OutOfOrderModel::ThreadContext>::format(const x86sim::OutOfOrderModel::ThreadContext& thread,
-                                                            std::format_context& fctx) const {
+auto std::formatter<x86sim::OutOfOrderModel::ThreadContext>::format(
+    const x86sim::OutOfOrderModel::ThreadContext& thread, std::format_context& fctx) const {
   using namespace x86sim;
   auto out = fctx.out();
   out = std::format_to(out, "SMT per-thread state for t{}:\n", thread.threadid);
@@ -690,8 +690,8 @@ auto std::formatter<x86sim::OutOfOrderModel::ThreadContext>::format(const x86sim
 }
 
 
-auto std::formatter<x86sim::OutOfOrderModel::OutOfOrderCore>::format(const x86sim::OutOfOrderModel::OutOfOrderCore& core,
-                                                             std::format_context& ctx) const {
+auto std::formatter<x86sim::OutOfOrderModel::OutOfOrderCore>::format(
+    const x86sim::OutOfOrderModel::OutOfOrderCore& core, std::format_context& ctx) const {
   using namespace x86sim;
   auto out = ctx.out();
 
@@ -699,8 +699,8 @@ auto std::formatter<x86sim::OutOfOrderModel::OutOfOrderCore>::format(const x86si
   foreach (i, PHYS_REG_FILE_COUNT) {
     out = std::format_to(out, "{}\n", core.physregfiles[i]);
   }
-  out = std::format_to(out, "Issue Queues: int0={} int1={} ld={} fp={}\n", core.issueq_int0.count, core.issueq_int1.count,
-                       core.issueq_ld.count, core.issueq_fp.count);
+  out = std::format_to(out, "Issue Queues: int0={} int1={} ld={} fp={}\n", core.issueq_int0.count,
+                       core.issueq_int1.count, core.issueq_ld.count, core.issueq_fp.count);
 
   out = std::format_to(out, "Caches: lfrq_count={} missbuf_free={}\n", core.caches.lfrq.count,
                        core.caches.missbuf.freemap.count());
@@ -833,11 +833,10 @@ bool ThreadContext::handle_barrier() {
   int assistid = ctx.commitarf[REG_rip];
   assist_func_t assist = (assist_func_t)(Waddr)assistid_to_func[assistid];
 
-  logging::println(logging::INFO,
-                   "[vcpu {}] Barrier (#{} -> {} {} called from {}; return to {}) at {} cycles, {} commits", ctx.vcpuid,
-                   assistid, (void*)assist, assist_name(assist), RIPVirtPhys(ctx.commitarf[REG_selfrip]).update(ctx),
-                   (void*)(Waddr)ctx.commitarf[REG_nextrip], core.machine.sim_cycle,
-                   core.machine.total_user_insns_committed);
+  logging::println(
+      logging::INFO, "[vcpu {}] Barrier (#{} -> {} {} called from {}; return to {}) at {} cycles, {} commits",
+      ctx.vcpuid, assistid, (void*)assist, assist_name(assist), RIPVirtPhys(ctx.commitarf[REG_selfrip]).update(ctx),
+      (void*)(Waddr)ctx.commitarf[REG_nextrip], core.machine.sim_cycle, core.machine.total_user_insns_committed);
   logging::flush();
 
   logging::println(logging::DEBUG, "Calling assist function at {}...", (void*)assist);
@@ -1031,8 +1030,8 @@ void EventLog::print(bool only_to_tail) {
 
 } // namespace x86sim
 
-auto std::formatter<x86sim::OutOfOrderModel::OutOfOrderCoreEvent>::format(const x86sim::OutOfOrderModel::OutOfOrderCoreEvent& ev,
-                                                                  std::format_context& ctx) const {
+auto std::formatter<x86sim::OutOfOrderModel::OutOfOrderCoreEvent>::format(
+    const x86sim::OutOfOrderModel::OutOfOrderCoreEvent& ev, std::format_context& ctx) const {
   using namespace x86sim;
   auto out = ctx.out();
   bool ld = isload(ev.uop.opcode);
@@ -1767,8 +1766,8 @@ int OutOfOrderMachine::run() {
     this->iterations++;
 
     if unlikely (stopping) {
-      logging::println(logging::TRACE, "Waiting for all VCPUs to stop at {}: mask = {} (need {} VCPUs)", this->sim_cycle,
-                       stopped.to_string(), contextcount);
+      logging::println(logging::TRACE, "Waiting for all VCPUs to stop at {}: mask = {} (need {} VCPUs)",
+                       this->sim_cycle, stopped.to_string(), contextcount);
       exiting |= (stopped.count() == contextcount);
     }
 
@@ -1804,7 +1803,7 @@ int OutOfOrderMachine::run() {
 
 void OutOfOrderCore::flush_tlb(Context& ctx, int threadid, bool selective, Waddr virtaddr) {
   ThreadContext& thread = *threads[threadid];
-  
+
   logging::print(logging::DEBUG, "[vcpu {}] core {}, thread {}: Flush TLBs", ctx.vcpuid, coreid, threadid);
   if (selective)
     logging::println(logging::DEBUG, " for virtaddr {}", (void*)virtaddr);
@@ -1933,8 +1932,8 @@ void OutOfOrderMachine::flush_all_pipelines() {
 // Formatter implementations
 } // namespace x86sim
 
-auto std::formatter<x86sim::OutOfOrderModel::PhysicalRegister>::format(const x86sim::OutOfOrderModel::PhysicalRegister& physreg,
-                                                               std::format_context& ctx) const {
+auto std::formatter<x86sim::OutOfOrderModel::PhysicalRegister>::format(
+    const x86sim::OutOfOrderModel::PhysicalRegister& physreg, std::format_context& ctx) const {
   using namespace x86sim;
   using namespace OutOfOrderModel;
   std::string vf = format_value_and_flags(physreg.data, physreg.flags);
@@ -1947,8 +1946,8 @@ auto std::formatter<x86sim::OutOfOrderModel::PhysicalRegister>::format(const x86
 }
 
 
-auto std::formatter<x86sim::OutOfOrderModel::PhysicalRegisterFile>::format(const x86sim::OutOfOrderModel::PhysicalRegisterFile& prf,
-                                                                   std::format_context& ctx) const {
+auto std::formatter<x86sim::OutOfOrderModel::PhysicalRegisterFile>::format(
+    const x86sim::OutOfOrderModel::PhysicalRegisterFile& prf, std::format_context& ctx) const {
   using namespace x86sim;
   auto out = std::format_to(ctx.out(), "PhysicalRegisterFile<{}, rfid {}, size {}>:\n", prf.name, prf.rfid, prf.size);
   for (int i = 0; i < prf.size; i++) {
@@ -1958,8 +1957,8 @@ auto std::formatter<x86sim::OutOfOrderModel::PhysicalRegisterFile>::format(const
 }
 
 
-auto std::formatter<x86sim::OutOfOrderModel::ReorderBufferEntry>::format(const x86sim::OutOfOrderModel::ReorderBufferEntry& rob,
-                                                                 std::format_context& ctx) const {
+auto std::formatter<x86sim::OutOfOrderModel::ReorderBufferEntry>::format(
+    const x86sim::OutOfOrderModel::ReorderBufferEntry& rob, std::format_context& ctx) const {
   using namespace x86sim;
   using namespace OutOfOrderModel;
   std::string name = nameof(rob.uop);
@@ -1985,8 +1984,8 @@ auto std::formatter<x86sim::OutOfOrderModel::ReorderBufferEntry>::format(const x
 }
 
 
-auto std::formatter<x86sim::OutOfOrderModel::LoadStoreQueueEntry>::format(const x86sim::OutOfOrderModel::LoadStoreQueueEntry& lsq,
-                                                                  std::format_context& ctx) const {
+auto std::formatter<x86sim::OutOfOrderModel::LoadStoreQueueEntry>::format(
+    const x86sim::OutOfOrderModel::LoadStoreQueueEntry& lsq, std::format_context& ctx) const {
   using namespace x86sim;
   using namespace OutOfOrderModel;
   auto out = std::format_to(ctx.out(), "{}{:<3} uuid {:>10} rob {:<3} r{:<3}", (lsq.store ? "st" : "ld"), lsq.index(),

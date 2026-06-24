@@ -1,0 +1,40 @@
+#!/usr/bin/env sh
+# Reject commits whose staged C/C++ changes are not clang-format clean.
+#
+# Enable with:   git config core.hooksPath .githooks
+# (run once per clone; `make hooks` does this for you).
+#
+# Set CLANG_FORMAT to override the binary. If clang-format is missing the hook
+# skips silently rather than blocking the commit.
+set -eu
+
+CLANG_FORMAT="${CLANG_FORMAT:-clang-format}"
+if ! command -v "$CLANG_FORMAT" >/dev/null 2>&1; then
+  echo "pre-commit: '$CLANG_FORMAT' not found; skipping clang-format check" >&2
+  exit 0
+fi
+
+# Added/copied/modified staged sources owned by this project.
+files=$(git diff --cached --name-only --diff-filter=ACM -- \
+  'src/*.cpp' 'src/*.cc' 'src/*.c' 'src/*.h' 'src/*.hpp' \
+  'include/*.h' 'include/*.hpp' 'include/*.cpp')
+[ -z "$files" ] && exit 0
+
+fail=0
+for f in $files; do
+  # Compare the *staged* blob against its formatted form, so what gets checked
+  # is exactly what would be committed (not unstaged working-tree edits).
+  staged=$(git show ":$f")
+  formatted=$(printf '%s' "$staged" | "$CLANG_FORMAT" --assume-filename="$f")
+  if [ "$staged" != "$formatted" ]; then
+    echo "pre-commit: needs formatting: $f" >&2
+    fail=1
+  fi
+done
+
+if [ "$fail" -ne 0 ]; then
+  echo "" >&2
+  echo "Fix with 'tools/clang-format.sh fix' (or clang-format -i), then re-stage." >&2
+  exit 1
+fi
+exit 0

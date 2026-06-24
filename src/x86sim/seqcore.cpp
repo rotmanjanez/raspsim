@@ -265,8 +265,8 @@ struct std::formatter<x86sim::TransactionalMemory<N, setcount>> {
 
 
 template<int N, int setcount>
-auto std::formatter<x86sim::TransactionalMemory<N, setcount>>::format(const x86sim::TransactionalMemory<N, setcount>& tm,
-                                                              std::format_context& ctx) const {
+auto std::formatter<x86sim::TransactionalMemory<N, setcount>>::format(
+    const x86sim::TransactionalMemory<N, setcount>& tm, std::format_context& ctx) const {
   using namespace x86sim;
   auto out = ctx.out();
   out = std::format_to(out, "x86sim::TransactionalMemory containing {} stores:\n", tm.count);
@@ -476,14 +476,14 @@ namespace x86sim {
 struct SequentialCoreEventLog {
   MachineImpl* machine = nullptr;
   SequentialCoreEvent* start;
-	SequentialCoreEvent* end;
-	SequentialCoreEvent* tail;
+  SequentialCoreEvent* end;
+  SequentialCoreEvent* tail;
 
   SequentialCoreEventLog() = default;
 
-	explicit SequentialCoreEventLog(MachineImpl& machine_): machine(&machine_) {
-		start = null;
-		end = null;
+  explicit SequentialCoreEventLog(MachineImpl& machine_) : machine(&machine_) {
+    start = null;
+    end = null;
     tail = null;
   }
 
@@ -772,8 +772,9 @@ struct SequentialCore {
       // and split them up on the fly.
       //
       if unlikely (config.log.event_log_enabled) {
-        SequentialCoreEvent* event = eventlog.add(EVENT_LOAD_STORE_UNALIGNED, ctx.vcpuid, uop, arf[REG_rip],
-                                                  current_uop_in_macro_op, current_uuid, machine.total_user_insns_committed);
+        SequentialCoreEvent* event =
+            eventlog.add(EVENT_LOAD_STORE_UNALIGNED, ctx.vcpuid, uop, arf[REG_rip], current_uop_in_macro_op,
+                         current_uuid, machine.total_user_insns_committed);
         event->loadstore.virtaddr = origaddr;
       }
 
@@ -793,8 +794,9 @@ struct SequentialCore {
     }
 
     if unlikely (config.log.event_log_enabled) {
-      SequentialCoreEvent* event = eventlog.add((STORE) ? EVENT_STORE : EVENT_LOAD, ctx.vcpuid, uop, arf[REG_rip],
-                                                current_uop_in_macro_op, current_uuid, machine.total_user_insns_committed);
+      SequentialCoreEvent* event =
+          eventlog.add((STORE) ? EVENT_STORE : EVENT_LOAD, ctx.vcpuid, uop, arf[REG_rip], current_uop_in_macro_op,
+                       current_uuid, machine.total_user_insns_committed);
       event->loadstore.sfr = state;
       event->loadstore.virtaddr = addr;
       event->loadstore.origaddr = origaddr;
@@ -1505,89 +1507,88 @@ void SequentialMachine::flush_tlb(Context& ctx) {}
 void SequentialMachine::flush_tlb_virt(Context& ctx, Waddr virtaddr) {}
 
 int SequentialMachine::run() {
-    eventlog.machine = this;
+  eventlog.machine = this;
 
-    logging::println("Starting sequential core toplevel loop at {} cycles and {} commits", sim_cycle,
-                     total_user_insns_committed);
-    logging::flush();
+  logging::println("Starting sequential core toplevel loop at {} cycles and {} commits", sim_cycle,
+                   total_user_insns_committed);
+  logging::flush();
 
-    if unlikely (config.log.event_log_enabled && (!eventlog.start)) {
-      eventlog.init(config.log.event_log_ring_buffer_size);
-    }
-
-    foreach (i, contextcount) {
-      SequentialCore& core = *cores[i];
-      Context& ctx = core.ctx;
-
-      core.external_to_core_state(ctx);
-
-      logging::println("VCPU {} initial state:", i);
-      logging::println("{}", ctx);
-    }
-
-    bool exiting = false;
-
-    logging::println(logging::INFO, "Current logenable = {}, start_log_at_iteration = {}, loglevel {}", logenable, config.log.start_log_at_iteration, config.log.loglevel);
-
-    for (;;) {
-      if unlikely (iterations >= config.log.start_log_at_iteration)
-        logenable = 1;
-
-      int running_thread_count = 0;
-      foreach (i, contextcount) {
-        SequentialCore& core = *cores[i];
-
-        exiting |= core.execute();
-      }
-
-      exiting |= iterations >= config.stop_at_iteration ||
-                 total_user_insns_committed >= config.stop_at_user_insns;
-
-      if unlikely (config.log.event_log_enabled) {
-        if unlikely (config.log.flush_event_log_every_cycle)
-          eventlog.flush(true);
-      }
-
-      iterations++;
-      sim_cycle++;
-      unhalted_cycle_count += (running_thread_count > 0);
-      stats.summary.cycles++;
-
-      if unlikely (exiting)
-        break;
-    }
-
-    logging::println(logging::INFO, "Exiting sequential mode at {} commits, {} uops and {} iterations (cycles)",
-                     total_user_insns_committed, total_uops_committed, iterations);
-    // logging::println(logging::TRACE, "{}", *this);
-
-    foreach (i, contextcount) {
-      SequentialCore& core = *cores[i];
-      Context& ctx = core.ctx;
-
-      core.core_to_external_state(ctx);
-
-      logging::println(logging::VERBOSE, "Core State at end:");
-      logging::println(logging::VERBOSE, "{}", ctx);
-    }
-
-    return exiting;
+  if unlikely (config.log.event_log_enabled && (!eventlog.start)) {
+    eventlog.init(config.log.event_log_ring_buffer_size);
   }
 
-  void SequentialMachine::dump_state() {
-    logging::println("Dumping event log for sequential core:");
-    eventlog.print();
+  foreach (i, contextcount) {
+    SequentialCore& core = *cores[i];
+    Context& ctx = core.ctx;
 
+    core.external_to_core_state(ctx);
+
+    logging::println("VCPU {} initial state:", i);
+    logging::println("{}", ctx);
+  }
+
+  bool exiting = false;
+
+  logging::println(logging::INFO, "Current logenable = {}, start_log_at_iteration = {}, loglevel {}", logenable,
+                   config.log.start_log_at_iteration, config.log.loglevel);
+
+  for (;;) {
+    if unlikely (iterations >= config.log.start_log_at_iteration)
+      logenable = 1;
+
+    int running_thread_count = 0;
     foreach (i, contextcount) {
       SequentialCore& core = *cores[i];
-      core.print_state();
+
+      exiting |= core.execute();
     }
+
+    exiting |= iterations >= config.stop_at_iteration || total_user_insns_committed >= config.stop_at_user_insns;
+
+    if unlikely (config.log.event_log_enabled) {
+      if unlikely (config.log.flush_event_log_every_cycle)
+        eventlog.flush(true);
+    }
+
+    iterations++;
+    sim_cycle++;
+    unhalted_cycle_count += (running_thread_count > 0);
+    stats.summary.cycles++;
+
+    if unlikely (exiting)
+      break;
   }
 
-  void SequentialMachine::update_stats(PTLsimStats& stats) {
-    // (nop)
+  logging::println(logging::INFO, "Exiting sequential mode at {} commits, {} uops and {} iterations (cycles)",
+                   total_user_insns_committed, total_uops_committed, iterations);
+  // logging::println(logging::TRACE, "{}", *this);
+
+  foreach (i, contextcount) {
+    SequentialCore& core = *cores[i];
+    Context& ctx = core.ctx;
+
+    core.core_to_external_state(ctx);
+
+    logging::println(logging::VERBOSE, "Core State at end:");
+    logging::println(logging::VERBOSE, "{}", ctx);
   }
 
+  return exiting;
+}
+
+void SequentialMachine::dump_state() {
+  logging::println("Dumping event log for sequential core:");
+  eventlog.print();
+
+  foreach (i, contextcount) {
+    SequentialCore& core = *cores[i];
+    core.print_state();
+  }
+}
+
+void SequentialMachine::update_stats(PTLsimStats& stats) {
+  // (nop)
+}
 
 
 } // namespace x86sim

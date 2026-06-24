@@ -257,9 +257,15 @@ inline void set_level(int level) {
   Logger::instance().set_level(level);
 }
 
-inline void set_file_sink(const std::filesystem::path& filename) { Logger::instance().set_file_sink(filename); }
-inline void set_file_sink(const char* filename) { Logger::instance().set_file_sink(filename); }
-inline void set_file_sink(FILE* fp, bool owns_file = false) { Logger::instance().set_file_sink(fp, owns_file); }
+inline void set_file_sink(const std::filesystem::path& filename) {
+  Logger::instance().set_file_sink(filename);
+}
+inline void set_file_sink(const char* filename) {
+  Logger::instance().set_file_sink(filename);
+}
+inline void set_file_sink(FILE* fp, bool owns_file = false) {
+  Logger::instance().set_file_sink(fp, owns_file);
+}
 
 template<typename... Args>
 inline void eprint(std::format_string<Args...> fmt, Args&&... args) {

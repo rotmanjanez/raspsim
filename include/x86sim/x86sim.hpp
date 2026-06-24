@@ -167,7 +167,8 @@ public:
 
   [[nodiscard]] std::expected<void, MemoryError> map(address_t start, std::uint64_t size, Protection) noexcept;
   void unmap(address_t start, std::uint64_t size) noexcept;
-  [[nodiscard]] std::expected<void, MemoryError> read_memory_into(address_t start, std::span<std::byte> out) const noexcept;
+  [[nodiscard]] std::expected<void, MemoryError> read_memory_into(address_t start,
+                                                                  std::span<std::byte> out) const noexcept;
   [[nodiscard]] std::expected<void, MemoryError> write_memory(address_t start, std::span<const std::byte>) noexcept;
 
   [[nodiscard]] RunResult run(RunOptions = {});
@@ -340,8 +341,8 @@ struct std::formatter<x86sim::CpuidResult> {
 
   template<typename FormatContext>
   auto format(const x86sim::CpuidResult& result, FormatContext& ctx) const {
-    return std::format_to(ctx.out(), "eax=0x{:08x}, ebx=0x{:08x}, ecx=0x{:08x}, edx=0x{:08x}", result.eax,
-                          result.ebx, result.ecx, result.edx);
+    return std::format_to(ctx.out(), "eax=0x{:08x}, ebx=0x{:08x}, ecx=0x{:08x}, edx=0x{:08x}", result.eax, result.ebx,
+                          result.ecx, result.edx);
   }
 };
 
@@ -351,8 +352,7 @@ struct std::formatter<x86sim::SyscallResult> {
 
   template<typename FormatContext>
   auto format(const x86sim::SyscallResult& result, FormatContext& ctx) const {
-    auto out = std::format_to(ctx.out(), "reason={}, continue_execution={}", result.reason,
-                              result.continue_execution);
+    auto out = std::format_to(ctx.out(), "reason={}, continue_execution={}", result.reason, result.continue_execution);
     if (!result.message.empty())
       out = std::format_to(out, ", message={}", result.message);
     return out;
@@ -405,9 +405,9 @@ struct std::formatter<x86sim::X86Exception> {
     if (!exception.message.empty()) {
       out = std::format_to(out, "{}", exception.message);
     } else {
-      out = std::format_to(out, "Exception {} code={} addr=0x{:x} @ rip 0x{:x}",
-                           static_cast<unsigned>(exception.vector), exception.error_code,
-                           exception.virtual_address, exception.rip);
+      out =
+          std::format_to(out, "Exception {} code={} addr=0x{:x} @ rip 0x{:x}", static_cast<unsigned>(exception.vector),
+                         exception.error_code, exception.virtual_address, exception.rip);
     }
     if (!exception.context.empty())
       out = std::format_to(out, "\n{}", exception.context);
@@ -441,8 +441,8 @@ struct std::formatter<x86sim::Machine> {
     return std::format_to(ctx.out(),
                           "x86sim::Machine(core={}, core_count={}, address_space={}, cycles={}, instructions={}, "
                           "sse={}, x87={}, perfect_cache={}, static_branch_prediction={}, core0={})",
-                          options.core, options.core_count, static_cast<const void*>(&machine.address_space()), stats.cycles,
-                          stats.instructions, options.sse, options.x87, options.debug.perfect_cache,
+                          options.core, options.core_count, static_cast<const void*>(&machine.address_space()),
+                          stats.cycles, stats.instructions, options.sse, options.x87, options.debug.perfect_cache,
                           options.debug.static_branchpred,
                           options.core_count == 0 ? x86sim::RegisterFile{} : machine.register_file(0));
   }

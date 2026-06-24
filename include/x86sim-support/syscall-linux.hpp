@@ -153,10 +153,21 @@ struct SysPrlimit64 {
   };
 
   constexpr SysPrlimit64() noexcept
-      : limits{Limit{unlimited, unlimited}, Limit{unlimited, unlimited}, Limit{unlimited, unlimited},
-               Limit{8 * 1024 * 1024, unlimited}, Limit{0, unlimited}, Limit{unlimited, unlimited},
-               Limit{4096, 4096}, Limit{1024, 1024}, Limit{64 * 1024, 64 * 1024}, Limit{unlimited, unlimited},
-               Limit{unlimited, unlimited}, Limit{4096, 4096}, Limit{819200, 819200}, Limit{0, 0}, Limit{0, 0},
+      : limits{Limit{unlimited, unlimited},
+               Limit{unlimited, unlimited},
+               Limit{unlimited, unlimited},
+               Limit{8 * 1024 * 1024, unlimited},
+               Limit{0, unlimited},
+               Limit{unlimited, unlimited},
+               Limit{4096, 4096},
+               Limit{1024, 1024},
+               Limit{64 * 1024, 64 * 1024},
+               Limit{unlimited, unlimited},
+               Limit{unlimited, unlimited},
+               Limit{4096, 4096},
+               Limit{819200, 819200},
+               Limit{0, 0},
+               Limit{0, 0},
                Limit{unlimited, unlimited}} {}
 
   [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, RegisterFile&, SyscallKind) noexcept;
@@ -214,7 +225,8 @@ public:
 
   constexpr explicit Chain(Handlers... handlers) : handlers_(std::move(handlers)...) {}
 
-  [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine& machine, RegisterFile& context, SyscallKind kind) noexcept {
+  [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine& machine, RegisterFile& context,
+                                                         SyscallKind kind) noexcept {
     return try_syscall_at<0>(machine, context, kind);
   }
 
@@ -224,17 +236,14 @@ public:
     return detail::unsupported_syscall(context, kind);
   }
 
-  [[nodiscard]] constexpr auto into_tuple() const& {
-    return handlers_;
-  }
+  [[nodiscard]] constexpr auto into_tuple() const& { return handlers_; }
 
-  [[nodiscard]] constexpr auto into_tuple() && {
-    return std::move(handlers_);
-  }
+  [[nodiscard]] constexpr auto into_tuple() && { return std::move(handlers_); }
 
 private:
   template<std::size_t index>
-  [[nodiscard]] std::optional<SyscallResult> try_syscall_at(Machine& machine, RegisterFile& context, SyscallKind kind) noexcept {
+  [[nodiscard]] std::optional<SyscallResult> try_syscall_at(Machine& machine, RegisterFile& context,
+                                                            SyscallKind kind) noexcept {
     if constexpr (index == sizeof...(Handlers)) {
       return std::nullopt;
     } else {

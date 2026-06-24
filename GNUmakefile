@@ -16,7 +16,7 @@ export CMAKE_GENERATOR := $(GEN)
 PRESETS := debug release relwithdeb tsan
 CMAKE_TARGETS := raspsim x86sim x86sim_defaults x86sim-linux
 
-.PHONY: all $(PRESETS) $(CMAKE_TARGETS) test clean distclean
+.PHONY: all $(PRESETS) $(CMAKE_TARGETS) test clean distclean format format-check hooks
 
 all: debug
 
@@ -45,3 +45,17 @@ clean:
 # Wipe all build artifacts.
 distclean:
 	rm -rf build compile_commands.json
+
+# Reformat all project C/C++ sources in place with clang-format.
+format:
+	tools/clang-format.sh fix
+
+# Fail if any source is not clang-format clean (same check CI runs).
+format-check:
+	tools/clang-format.sh check
+
+# Point this clone's git hooks at the tracked .githooks directory so the
+# clang-format pre-commit hook runs.
+hooks:
+	git config core.hooksPath .githooks
+	@echo "core.hooksPath set to .githooks"

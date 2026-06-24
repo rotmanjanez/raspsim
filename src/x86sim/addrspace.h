@@ -90,9 +90,7 @@ public:
   void make_accessible(void* address, Waddr size, spat_t top);
   void make_inaccessible(void* address, Waddr size, spat_t top);
 
-  Waddr pageid(void* address) const {
-    return ((W64)lowbits((W64)address, ADDRESS_SPACE_BITS)) >> log2(PAGE_SIZE);
-  }
+  Waddr pageid(void* address) const { return ((W64)lowbits((W64)address, ADDRESS_SPACE_BITS)) >> log2(PAGE_SIZE); }
 
   Waddr pageid(Waddr address) const { return pageid((void*)address); }
 

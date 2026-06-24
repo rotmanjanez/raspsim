@@ -22,10 +22,14 @@ namespace x86sim {
 // Round per the x87 FPCW rounding-control field (0=nearest, 1=down, 2=up, 3=truncate)
 static double x87_round(double v, int rc) {
   switch (rc) {
-  case 1: return std::floor(v);
-  case 2: return std::ceil(v);
-  case 3: return std::trunc(v);
-  default: return std::nearbyint(v);
+  case 1:
+    return std::floor(v);
+  case 2:
+    return std::ceil(v);
+  case 3:
+    return std::trunc(v);
+  default:
+    return std::nearbyint(v);
   }
 }
 
@@ -230,11 +234,31 @@ void assist_x87_fxam(Context& ctx) {
   X87StatusWord* sw = (X87StatusWord*)&ctx.commitarf[REG_fpsw];
   sw->c1 = std::signbit(ra.d);
   switch (std::fpclassify(ra.d)) {
-  case FP_NAN:       sw->c3 = 0; sw->c2 = 0; sw->c0 = 1; break;
-  case FP_INFINITE:  sw->c3 = 0; sw->c2 = 1; sw->c0 = 1; break;
-  case FP_ZERO:      sw->c3 = 1; sw->c2 = 0; sw->c0 = 0; break;
-  case FP_SUBNORMAL: sw->c3 = 1; sw->c2 = 1; sw->c0 = 0; break;
-  default:           sw->c3 = 0; sw->c2 = 1; sw->c0 = 0; break; // normal
+  case FP_NAN:
+    sw->c3 = 0;
+    sw->c2 = 0;
+    sw->c0 = 1;
+    break;
+  case FP_INFINITE:
+    sw->c3 = 0;
+    sw->c2 = 1;
+    sw->c0 = 1;
+    break;
+  case FP_ZERO:
+    sw->c3 = 1;
+    sw->c2 = 0;
+    sw->c0 = 0;
+    break;
+  case FP_SUBNORMAL:
+    sw->c3 = 1;
+    sw->c2 = 1;
+    sw->c0 = 0;
+    break;
+  default:
+    sw->c3 = 0;
+    sw->c2 = 1;
+    sw->c0 = 0;
+    break; // normal
   }
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
 }

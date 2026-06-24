@@ -30,7 +30,9 @@ MachineImpl::MachineImpl(Machine& owner_, Options config_)
 
 MachineImpl::~MachineImpl() = default;
 
-int MachineImpl::run() { return 0; }
+int MachineImpl::run() {
+  return 0;
+}
 
 Context::Context(const Options& config, MachineImpl& core, int vcpuid_) : Context() {
   machine = &core.owner;
@@ -109,7 +111,8 @@ bool handle_config_change(Options& options, int argc, char** argv) {
 
   logenable = 1;
 
-  if (!options.debug.bbcache_dump_filename.empty() && (options.debug.bbcache_dump_filename != current_bbcache_dump_filename)) {
+  if (!options.debug.bbcache_dump_filename.empty() &&
+      (options.debug.bbcache_dump_filename != current_bbcache_dump_filename)) {
     // Can also use "-logfile /dev/fd/1" to send to stdout (or /dev/fd/2 for stderr):
     if (bbcache_dump_file)
       std::fclose(bbcache_dump_file);

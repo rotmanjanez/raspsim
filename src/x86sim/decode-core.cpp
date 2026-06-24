@@ -1461,8 +1461,8 @@ void print_invalid_insns(MachineImpl& machine, int op, const byte* ripstart, con
         logging::INFO,
         "translate: page fault at iteration {}, {}, commits: ripstart {}, rip {}: required {} more bytes but "
         "only fetched {} bytes; page fault error code: {}",
-        machine.iterations, machine.total_user_insns_committed, (const void*)ripstart, (const void*)rip, (rip - ripstart),
-        valid_byte_count, pfec);
+        machine.iterations, machine.total_user_insns_committed, (const void*)ripstart, (const void*)rip,
+        (rip - ripstart), valid_byte_count, pfec);
     logging::flush();
   } else {
     logging::println(
@@ -1963,7 +1963,8 @@ bool TraceDecoder::translate() {
   {
     std::string prefix_str;
     foreach (i, PFX_count) {
-      if (prefixes & (1 << i)) prefix_str += std::format(" {}", prefix_names[i]);
+      if (prefixes & (1 << i))
+        prefix_str += std::format(" {}", prefix_names[i]);
     }
     logging::println(logging::DEBUG, "prefixes = {}:{}", prefixes, prefix_str);
   }

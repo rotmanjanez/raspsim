@@ -111,7 +111,8 @@ inline T x86_aluop2(T ra, T rb, W16 rcflags, byte& cf, byte& of) {
   constexpr U sign_bit = U(1) << (std::numeric_limits<U>::digits - 1);
   const U intermediate = U(Operation<U>{}(a, b));
   const U result = U(Operation<U>{}(intermediate, carry));
-  const bool carry_out = subtract ? ((a < b) || (intermediate < carry)) : ((intermediate < a) || (result < intermediate));
+  const bool carry_out =
+      subtract ? ((a < b) || (intermediate < carry)) : ((intermediate < a) || (result < intermediate));
   const U rhs_sign = subtract ? U(~b) : b;
   const bool overflow = (~(a ^ rhs_sign) & (a ^ result) & sign_bit) != 0;
 
@@ -153,11 +154,10 @@ inline UopResult aluop(const UopInputs& inputs) {
 }
 
 #define make_anyop_all_sizes(ptlopcode, mapname, opclass, nativeop, flagset)                                           \
-  UopImpl mapname[4][2] = {                                                                                     \
-      {&opclass<ptlopcode, nativeop, W8, 0>, &opclass<ptlopcode, nativeop, W8, (flagset)>},                            \
-      {&opclass<ptlopcode, nativeop, W16, 0>, &opclass<ptlopcode, nativeop, W16, (flagset)>},                          \
-      {&opclass<ptlopcode, nativeop, W32, 0>, &opclass<ptlopcode, nativeop, W32, (flagset)>},                          \
-      {&opclass<ptlopcode, nativeop, W64, 0>, &opclass<ptlopcode, nativeop, W64, (flagset)>}}
+  UopImpl mapname[4][2] = {{&opclass<ptlopcode, nativeop, W8, 0>, &opclass<ptlopcode, nativeop, W8, (flagset)>},       \
+                           {&opclass<ptlopcode, nativeop, W16, 0>, &opclass<ptlopcode, nativeop, W16, (flagset)>},     \
+                           {&opclass<ptlopcode, nativeop, W32, 0>, &opclass<ptlopcode, nativeop, W32, (flagset)>},     \
+                           {&opclass<ptlopcode, nativeop, W64, 0>, &opclass<ptlopcode, nativeop, W64, (flagset)>}}
 
 #define make_aluop_all_sizes(ptlopcode, mapname, nativeop, flagset)                                                    \
   make_anyop_all_sizes(ptlopcode, mapname, aluop, nativeop, flagset);
@@ -302,7 +302,7 @@ inline UopResult aluop3s(const UopInputs& inputs) {
 
 // [size][extshift][setflags]
 #define make_aluop3s_all_sizes_all_shifts(ptlopcode, mapname, nativeop, flagset)                                       \
-  UopImpl mapname[4][4][2] = {                                                                                  \
+  UopImpl mapname[4][4][2] = {                                                                                         \
       {                                                                                                                \
           {&aluop3s<ptlopcode, nativeop, W8, 0, 0>, &aluop3s<ptlopcode, nativeop, W8, (flagset), 0>},                  \
           {&aluop3s<ptlopcode, nativeop, W8, 0, 1>, &aluop3s<ptlopcode, nativeop, W8, (flagset), 1>},                  \
@@ -510,12 +510,10 @@ inline UopResult shiftop(const UopInputs& inputs) {
 template<int ptlopcode, typename Operation>
 static constexpr std::array<std::array<UopImpl, 2>, 4> shiftop_impls = {
     std::array<UopImpl, 2>{&shiftop<ptlopcode, Operation, W8, 0>, &shiftop<ptlopcode, Operation, W8, ZAPS | CF | OF>},
-    std::array<UopImpl, 2>{&shiftop<ptlopcode, Operation, W16, 0>,
-                                  &shiftop<ptlopcode, Operation, W16, ZAPS | CF | OF>},
-    std::array<UopImpl, 2>{&shiftop<ptlopcode, Operation, W32, 0>,
-                                  &shiftop<ptlopcode, Operation, W32, ZAPS | CF | OF>},
+    std::array<UopImpl, 2>{&shiftop<ptlopcode, Operation, W16, 0>, &shiftop<ptlopcode, Operation, W16, ZAPS | CF | OF>},
+    std::array<UopImpl, 2>{&shiftop<ptlopcode, Operation, W32, 0>, &shiftop<ptlopcode, Operation, W32, ZAPS | CF | OF>},
     std::array<UopImpl, 2>{&shiftop<ptlopcode, Operation, W64, 0>,
-                                  &shiftop<ptlopcode, Operation, W64, ZAPS | CF | OF>}};
+                           &shiftop<ptlopcode, Operation, W64, ZAPS | CF | OF>}};
 
 static constexpr auto implmap_shl = shiftop_impls<OP_shl, ShiftLeftOp>;
 static constexpr auto implmap_shr = shiftop_impls<OP_shr, ShiftRightOp>;
@@ -660,11 +658,28 @@ UopResult uop_impl_permb(const UopInputs& inputs) {
 // Multiplies
 //
 
-template<typename T> struct double_width;
-template<> struct double_width<W8> { using u = W16; using s = W16s; };
-template<> struct double_width<W16> { using u = W32; using s = W32s; };
-template<> struct double_width<W32> { using u = W64; using s = W64s; };
-template<> struct double_width<W64> { using u = unsigned __int128; using s = __int128; };
+template<typename T>
+struct double_width;
+template<>
+struct double_width<W8> {
+  using u = W16;
+  using s = W16s;
+};
+template<>
+struct double_width<W16> {
+  using u = W32;
+  using s = W32s;
+};
+template<>
+struct double_width<W32> {
+  using u = W64;
+  using s = W64s;
+};
+template<>
+struct double_width<W64> {
+  using u = unsigned __int128;
+  using s = __int128;
+};
 
 enum class MulKind { Low, HighSigned, HighUnsigned };
 
@@ -687,9 +702,12 @@ struct x86_mul {
   }
 };
 
-template<typename T, int genflags> struct x86_op_mull : x86_mul<MulKind::Low, T, genflags> {};
-template<typename T, int genflags> struct x86_op_mulh : x86_mul<MulKind::HighSigned, T, genflags> {};
-template<typename T, int genflags> struct x86_op_mulhu : x86_mul<MulKind::HighUnsigned, T, genflags> {};
+template<typename T, int genflags>
+struct x86_op_mull : x86_mul<MulKind::Low, T, genflags> {};
+template<typename T, int genflags>
+struct x86_op_mulh : x86_mul<MulKind::HighSigned, T, genflags> {};
+template<typename T, int genflags>
+struct x86_op_mulhu : x86_mul<MulKind::HighUnsigned, T, genflags> {};
 
 make_aluop_all_sizes(OP_mull, implmap_mull, x86_op_mull, ZAPS | CF | OF);
 make_aluop_all_sizes(OP_mulh, implmap_mulh, x86_op_mulh, ZAPS | CF | OF);
@@ -731,8 +749,7 @@ inline UopResult uop_impl_mulhl(const UopInputs& inputs) {
   return out;
 }
 
-UopImpl implmap_mulhl[4] = {&uop_impl_mulhl<W8>, &uop_impl_mulhl<W16>, &uop_impl_mulhl<W32>,
-                                   &uop_impl_mulhl<W64>};
+UopImpl implmap_mulhl[4] = {&uop_impl_mulhl<W8>, &uop_impl_mulhl<W16>, &uop_impl_mulhl<W32>, &uop_impl_mulhl<W64>};
 
 template<int ptlopcode, typename T>
 UopResult x86_div(const UopInputs& inputs) {
@@ -802,14 +819,12 @@ UopResult x86_rems(const UopInputs& inputs) {
   return out;
 }
 
-UopImpl implmap_div[4] = {&x86_div<OP_div, W8>, &x86_div<OP_div, W16>, &x86_div<OP_div, W32>,
-                                 &x86_div<OP_div, W64>};
-UopImpl implmap_rem[4] = {&x86_rem<OP_rem, W8>, &x86_rem<OP_rem, W16>, &x86_rem<OP_rem, W32>,
-                                 &x86_rem<OP_rem, W64>};
+UopImpl implmap_div[4] = {&x86_div<OP_div, W8>, &x86_div<OP_div, W16>, &x86_div<OP_div, W32>, &x86_div<OP_div, W64>};
+UopImpl implmap_rem[4] = {&x86_rem<OP_rem, W8>, &x86_rem<OP_rem, W16>, &x86_rem<OP_rem, W32>, &x86_rem<OP_rem, W64>};
 UopImpl implmap_divs[4] = {&x86_divs<OP_divs, W8>, &x86_divs<OP_divs, W16>, &x86_divs<OP_divs, W32>,
-                                  &x86_divs<OP_divs, W64>};
+                           &x86_divs<OP_divs, W64>};
 UopImpl implmap_rems[4] = {&x86_rems<OP_rems, W8>, &x86_rems<OP_rems, W16>, &x86_rems<OP_rems, W32>,
-                                  &x86_rems<OP_rems, W64>};
+                           &x86_rems<OP_rems, W64>};
 
 template<int ptlopcode, typename T, bool compare_for_max>
 UopResult uop_impl_min_max(const UopInputs& inputs) {
@@ -824,13 +839,13 @@ UopResult uop_impl_min_max(const UopInputs& inputs) {
 }
 
 UopImpl implmap_min[4] = {&uop_impl_min_max<OP_min, W8, 0>, &uop_impl_min_max<OP_min, W16, 0>,
-                                 &uop_impl_min_max<OP_min, W32, 0>, &uop_impl_min_max<OP_min, W64, 0>};
+                          &uop_impl_min_max<OP_min, W32, 0>, &uop_impl_min_max<OP_min, W64, 0>};
 UopImpl implmap_max[4] = {&uop_impl_min_max<OP_max, W8, 1>, &uop_impl_min_max<OP_max, W16, 1>,
-                                 &uop_impl_min_max<OP_max, W32, 1>, &uop_impl_min_max<OP_max, W64, 1>};
+                          &uop_impl_min_max<OP_max, W32, 1>, &uop_impl_min_max<OP_max, W64, 1>};
 UopImpl implmap_min_s[4] = {&uop_impl_min_max<OP_min, W8s, 0>, &uop_impl_min_max<OP_min, W16s, 0>,
-                                   &uop_impl_min_max<OP_min, W32s, 0>, &uop_impl_min_max<OP_min, W64s, 0>};
+                            &uop_impl_min_max<OP_min, W32s, 0>, &uop_impl_min_max<OP_min, W64s, 0>};
 UopImpl implmap_max_s[4] = {&uop_impl_min_max<OP_max, W8s, 1>, &uop_impl_min_max<OP_max, W16s, 1>,
-                                   &uop_impl_min_max<OP_max, W32s, 1>, &uop_impl_min_max<OP_max, W64s, 1>};
+                            &uop_impl_min_max<OP_max, W32s, 1>, &uop_impl_min_max<OP_max, W64s, 1>};
 
 //
 // Condition code evaluation
@@ -875,7 +890,7 @@ inline bool evaluate_cond(int ra, int rb) {
 }
 
 #define make_condop_all_conds_any(ptlopcode, subtype, subarrays, mapname, operation)                                   \
-  UopImpl implmap_##mapname[16] subarrays = {                                                                   \
+  UopImpl implmap_##mapname[16] subarrays = {                                                                          \
       subtype(ptlopcode, operation, 0),  subtype(ptlopcode, operation, 1),  subtype(ptlopcode, operation, 2),          \
       subtype(ptlopcode, operation, 3),  subtype(ptlopcode, operation, 4),  subtype(ptlopcode, operation, 5),          \
       subtype(ptlopcode, operation, 6),  subtype(ptlopcode, operation, 7),  subtype(ptlopcode, operation, 8),          \
@@ -894,9 +909,7 @@ inline bool evaluate_cond(int ra, int rb) {
 #define function(expr, rettype, ...)                                                                                   \
   class {                                                                                                              \
   public:                                                                                                              \
-    rettype operator()(__VA_ARGS__) {                                                                                  \
-      return (expr);                                                                                                   \
-    }                                                                                                                  \
+    rettype operator()(__VA_ARGS__) { return (expr); }                                                                 \
   }
 
 template<typename T>
@@ -1189,8 +1202,8 @@ inline UopResult floatop(const UopInputs& inputs) {
 
 #define make_exp_floatop_alltypes(name, expr)                                                                          \
   make_exp_floatop(exp_op_##name, expr);                                                                               \
-  UopImpl implmap_##name[4] = {&floatop<OP_##name, exp_op_##name, 0>, &floatop<OP_##name, exp_op_##name, 1>,    \
-                                      &floatop<OP_##name, exp_op_##name, 2>, &floatop<OP_##name, exp_op_##name, 3>}
+  UopImpl implmap_##name[4] = {&floatop<OP_##name, exp_op_##name, 0>, &floatop<OP_##name, exp_op_##name, 1>,           \
+                               &floatop<OP_##name, exp_op_##name, 2>, &floatop<OP_##name, exp_op_##name, 3>}
 
 enum class SSEFloatType : int {
   ScalarSingle = 0,
@@ -1302,11 +1315,10 @@ struct FloatCompare {
 };
 
 template<int ptlopcode, typename Operation>
-static constexpr std::array<UopImpl, 4> floatop2_impls = {
-    &floatop2<ptlopcode, SSEFloatType::ScalarSingle, Operation>,
-    &floatop2<ptlopcode, SSEFloatType::PackedSingle, Operation>,
-    &floatop2<ptlopcode, SSEFloatType::ScalarDouble, Operation>,
-    &floatop2<ptlopcode, SSEFloatType::PackedDouble, Operation>};
+static constexpr std::array<UopImpl, 4> floatop2_impls = {&floatop2<ptlopcode, SSEFloatType::ScalarSingle, Operation>,
+                                                          &floatop2<ptlopcode, SSEFloatType::PackedSingle, Operation>,
+                                                          &floatop2<ptlopcode, SSEFloatType::ScalarDouble, Operation>,
+                                                          &floatop2<ptlopcode, SSEFloatType::PackedDouble, Operation>};
 
 static constexpr auto implmap_fadd = floatop2_impls<OP_fadd, std::plus<>>;
 static constexpr auto implmap_fsub = floatop2_impls<OP_fsub, std::minus<>>;
@@ -1336,10 +1348,8 @@ UopResult x86_op_fmadd(const UopInputs& inputs) {
   return floatop2<OP_fsub, type, std::plus<>>({.ra = product.rddata, .rb = rc});
 }
 
-UopImpl implmap_fmadd[4] = {&x86_op_fmadd<SSEFloatType::ScalarSingle>,
-                                   &x86_op_fmadd<SSEFloatType::PackedSingle>,
-                                   &x86_op_fmadd<SSEFloatType::ScalarDouble>,
-                                   &x86_op_fmadd<SSEFloatType::PackedDouble>};
+UopImpl implmap_fmadd[4] = {&x86_op_fmadd<SSEFloatType::ScalarSingle>, &x86_op_fmadd<SSEFloatType::PackedSingle>,
+                            &x86_op_fmadd<SSEFloatType::ScalarDouble>, &x86_op_fmadd<SSEFloatType::PackedDouble>};
 
 template<SSEFloatType type>
 UopResult x86_op_fmsub(const UopInputs& inputs) {
@@ -1351,10 +1361,8 @@ UopResult x86_op_fmsub(const UopInputs& inputs) {
   return floatop2<OP_fsub, type, std::minus<>>({.ra = product.rddata, .rb = rc});
 }
 
-UopImpl implmap_fmsub[4] = {&x86_op_fmsub<SSEFloatType::ScalarSingle>,
-                                   &x86_op_fmsub<SSEFloatType::PackedSingle>,
-                                   &x86_op_fmsub<SSEFloatType::ScalarDouble>,
-                                   &x86_op_fmsub<SSEFloatType::PackedDouble>};
+UopImpl implmap_fmsub[4] = {&x86_op_fmsub<SSEFloatType::ScalarSingle>, &x86_op_fmsub<SSEFloatType::PackedSingle>,
+                            &x86_op_fmsub<SSEFloatType::ScalarDouble>, &x86_op_fmsub<SSEFloatType::PackedDouble>};
 
 template<SSEFloatType type>
 UopResult x86_op_fmsubr(const UopInputs& inputs) {
@@ -1366,10 +1374,8 @@ UopResult x86_op_fmsubr(const UopInputs& inputs) {
   return floatop2<OP_fsub, type, std::minus<>>({.ra = rc, .rb = product.rddata});
 }
 
-UopImpl implmap_fmsubr[4] = {&x86_op_fmsubr<SSEFloatType::ScalarSingle>,
-                                    &x86_op_fmsubr<SSEFloatType::PackedSingle>,
-                                    &x86_op_fmsubr<SSEFloatType::ScalarDouble>,
-                                    &x86_op_fmsubr<SSEFloatType::PackedDouble>};
+UopImpl implmap_fmsubr[4] = {&x86_op_fmsubr<SSEFloatType::ScalarSingle>, &x86_op_fmsubr<SSEFloatType::PackedSingle>,
+                             &x86_op_fmsubr<SSEFloatType::ScalarDouble>, &x86_op_fmsubr<SSEFloatType::PackedDouble>};
 
 static constexpr std::array<std::array<UopImpl, 4>, 8> implmap_fcmp = {
     floatop2_impls<OP_fcmp, FloatCompare<0>>, floatop2_impls<OP_fcmp, FloatCompare<1>>,
@@ -1402,13 +1408,12 @@ UopResult uop_impl_fcmpcc(const UopInputs& inputs) {
   return out;
 }
 
-UopImpl implmap_fcmpcc[8][4] = {&uop_impl_fcmpcc<0>, &uop_impl_fcmpcc<1>, &uop_impl_fcmpcc<2>,
-                                       &uop_impl_fcmpcc<3>};
+UopImpl implmap_fcmpcc[8][4] = {&uop_impl_fcmpcc<0>, &uop_impl_fcmpcc<1>, &uop_impl_fcmpcc<2>, &uop_impl_fcmpcc<3>};
 
 #define make_intsrc_fp_convop(name, op)                                                                                \
   UopResult uop_impl_##name(const UopInputs& inputs) {                                                                 \
     [[maybe_unused]] auto [raraw, rbraw, rcraw, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;                 \
-    UopResult out;                                                                                                    \
+    UopResult out;                                                                                                     \
     SSEType ra, rb, rc, rd;                                                                                            \
     ra.w64 = raraw;                                                                                                    \
     rb.w64 = rbraw;                                                                                                    \
@@ -1450,7 +1455,7 @@ static inline Int x86_fp_to_int(double v, bool trunc) {
   template<int ptlopcode, int trunc>                                                                                   \
   UopResult uop_impl_##name(const UopInputs& inputs) {                                                                 \
     [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;                          \
-    UopResult out;                                                                                                    \
+    UopResult out;                                                                                                     \
     const SSEType src(rb);                                                                                             \
     out.rddata = x86_fp_to_int<desttype>(srcexpr, trunc);                                                              \
     out.rdflags = 0;                                                                                                   \
@@ -1467,7 +1472,7 @@ make_intdest_fp_convop_allrounds(fcvt_d2q, W64, src.d);
   template<int trunc>                                                                                                  \
   UopResult uop_impl_##name(const UopInputs& inputs) {                                                                 \
     [[maybe_unused]] auto [raraw, rbraw, rcraw, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;                 \
-    UopResult out;                                                                                                    \
+    UopResult out;                                                                                                     \
     const SSEType ra(raraw), rb(rbraw);                                                                                \
     SSEType rd;                                                                                                        \
     expr;                                                                                                              \
@@ -1481,8 +1486,8 @@ make_intdest_fp_convop_allrounds(fcvt_d2q, W64, src.d);
 // the packed-double ops take the low lane from rb and the high lane from ra.
 make_fp_convop_allrounds(fcvt_s2i_p, (rd.w32.lo = x86_fp_to_int<W32>(rb.f.lo, trunc),
                                       rd.w32.hi = x86_fp_to_int<W32>(rb.f.hi, trunc)));
-make_fp_convop_allrounds(fcvt_d2i_p, (rd.w32.lo = x86_fp_to_int<W32>(rb.d, trunc),
-                                      rd.w32.hi = x86_fp_to_int<W32>(ra.d, trunc)));
+make_fp_convop_allrounds(fcvt_d2i_p,
+                         (rd.w32.lo = x86_fp_to_int<W32>(rb.d, trunc), rd.w32.hi = x86_fp_to_int<W32>(ra.d, trunc)));
 make_fp_convop_allrounds(fcvt_d2s_p, (rd.f.lo = (float)rb.d, rd.f.hi = (float)ra.d));
 
 //
@@ -1571,11 +1576,10 @@ UopResult vecpack(const UopInputs& inputs) {
 #define sizes(b, w, d, q) ((b << 0) | (w << 1) | (d << 2) | (q << 3))
 
 #define make_vec_implmap(name, fn, sizemask, ...)                                                                      \
-  UopImpl implmap_##name[4] = {                                                                                 \
-      bit(sizemask, 0) ? &fn<OP_##name, W8, __VA_ARGS__> : &x86_op_nop<OP_##name, 0>,                                  \
-      bit(sizemask, 1) ? &fn<OP_##name, W16, __VA_ARGS__> : &x86_op_nop<OP_##name, 1>,                                 \
-      bit(sizemask, 2) ? &fn<OP_##name, W32, __VA_ARGS__> : &x86_op_nop<OP_##name, 2>,                                 \
-      bit(sizemask, 3) ? &fn<OP_##name, W64, __VA_ARGS__> : &x86_op_nop<OP_##name, 3>}
+  UopImpl implmap_##name[4] = {bit(sizemask, 0) ? &fn<OP_##name, W8, __VA_ARGS__> : &x86_op_nop<OP_##name, 0>,         \
+                               bit(sizemask, 1) ? &fn<OP_##name, W16, __VA_ARGS__> : &x86_op_nop<OP_##name, 1>,        \
+                               bit(sizemask, 2) ? &fn<OP_##name, W32, __VA_ARGS__> : &x86_op_nop<OP_##name, 2>,        \
+                               bit(sizemask, 3) ? &fn<OP_##name, W64, __VA_ARGS__> : &x86_op_nop<OP_##name, 3>}
 
 #define signed_lane(a) std::make_signed_t<decltype(a)>
 
@@ -1628,7 +1632,7 @@ UopResult uop_impl_vmaddp_w(const UopInputs& inputs) {
 }
 
 UopImpl implmap_vmaddp[4] = {&x86_op_nop<OP_vmaddp, 0>, &uop_impl_vmaddp_w, &x86_op_nop<OP_vmaddp, 2>,
-                                    &x86_op_nop<OP_vmaddp, 3>};
+                             &x86_op_nop<OP_vmaddp, 3>};
 
 // psadbw: sum of absolute byte differences
 UopResult uop_impl_vsad_w(const UopInputs& inputs) {
@@ -1644,8 +1648,7 @@ UopResult uop_impl_vsad_w(const UopInputs& inputs) {
   return out;
 }
 
-UopImpl implmap_vsad[4] = {&x86_op_nop<OP_vsad, 0>, &uop_impl_vsad_w, &x86_op_nop<OP_vsad, 2>,
-                                  &x86_op_nop<OP_vsad, 3>};
+UopImpl implmap_vsad[4] = {&x86_op_nop<OP_vsad, 0>, &uop_impl_vsad_w, &x86_op_nop<OP_vsad, 2>, &x86_op_nop<OP_vsad, 3>};
 
 make_vec_implmap(vpack_us, vecpack, sizes(1, 0, 0, 0), true);
 make_vec_implmap(vpack_ss, vecpack, sizes(1, 1, 0, 0), false);
@@ -1751,14 +1754,13 @@ UopResult uop_impl_vcmp(const UopInputs& inputs) {
 #define makecond(c) {&uop_impl_vcmp<0, c>, &uop_impl_vcmp<1, c>, &uop_impl_vcmp<2, c>, &uop_impl_vcmp<3, c>}
 
 UopImpl implmap_vcmp[16][4] = {makecond(0),  makecond(1),  makecond(2),  makecond(3), makecond(4),  makecond(5),
-                                      makecond(6),  makecond(7),  makecond(8),  makecond(9), makecond(10), makecond(11),
-                                      makecond(12), makecond(13), makecond(14), makecond(15)};
+                               makecond(6),  makecond(7),  makecond(8),  makecond(9), makecond(10), makecond(11),
+                               makecond(12), makecond(13), makecond(14), makecond(15)};
 
 #undef makecond
 #undef sizes
 
-UopImpl get_synthcode_for_uop(int op, int size, bool setflags, int cond, int extshift, bool except,
-                                     bool internal) {
+UopImpl get_synthcode_for_uop(int op, int size, bool setflags, int cond, int extshift, bool except, bool internal) {
   UopImpl func;
 
   switch (op) {
@@ -2169,8 +2171,8 @@ void synth_uops_for_bb(BasicBlock& bb) {
   bb.synthops = new UopImpl[bb.count];
   foreach (i, bb.count) {
     const TransOp& transop = bb.transops[i];
-    UopImpl func = get_synthcode_for_uop(transop.opcode, transop.size, transop.setflags, transop.cond,
-                                                transop.extshift, 0, transop.internal);
+    UopImpl func = get_synthcode_for_uop(transop.opcode, transop.size, transop.setflags, transop.cond, transop.extshift,
+                                         0, transop.internal);
     bb.synthops[i] = func;
   }
 }

@@ -93,8 +93,7 @@ AddressSpace::~AddressSpace() {
 
 void AddressSpace::setattr(void* start, Waddr length, Protection prot) {
   logging::println("setattr: region {} to {} ({} KB) has user-visible attributes {}{}{}", start,
-                   (void*)((char*)start + length), length >> 10,
-                   (has_protection(prot, Protection::read) ? 'r' : '-'),
+                   (void*)((char*)start + length), length >> 10, (has_protection(prot, Protection::read) ? 'r' : '-'),
                    (has_protection(prot, Protection::write) ? 'w' : '-'),
                    (has_protection(prot, Protection::execute) ? 'x' : '-'));
 

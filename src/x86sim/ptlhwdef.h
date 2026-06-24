@@ -363,17 +363,33 @@ inline W64 x87_round_shift_right(W64 value, unsigned shift, bool negative, int r
     W64 remainder = value & ((1ULL << shift) - 1);
     W64 half = 1ULL << (shift - 1);
     switch (rc) {
-    case 1: increment = negative && remainder; break;
-    case 2: increment = !negative && remainder; break;
-    case 3: increment = false; break;
-    default: increment = (remainder > half) || (remainder == half && (rounded & 1)); break;
+    case 1:
+      increment = negative && remainder;
+      break;
+    case 2:
+      increment = !negative && remainder;
+      break;
+    case 3:
+      increment = false;
+      break;
+    default:
+      increment = (remainder > half) || (remainder == half && (rounded & 1));
+      break;
     }
   } else {
     switch (rc) {
-    case 1: increment = negative && value; break;
-    case 2: increment = !negative && value; break;
-    case 3: increment = false; break;
-    default: increment = (shift == 64) && (value > (1ULL << 63)); break;
+    case 1:
+      increment = negative && value;
+      break;
+    case 2:
+      increment = !negative && value;
+      break;
+    case 3:
+      increment = false;
+      break;
+    default:
+      increment = (shift == 64) && (value > (1ULL << 63));
+      break;
     }
   }
 
@@ -1612,8 +1628,9 @@ struct std::formatter<x86sim::BasicBlock> {
     using namespace x86sim;
     auto out = ctx.out();
 
-    out = std::format_to(out, "x86sim::BasicBlock {} of type {}: {} bytes, {} transops ({}t {}m {}s", (void*)(Waddr)bb.rip,
-                         branch_type_names[bb.brtype], bb.bytes, bb.count, bb.tagcount, bb.memcount, bb.storecount);
+    out = std::format_to(out, "x86sim::BasicBlock {} of type {}: {} bytes, {} transops ({}t {}m {}s",
+                         (void*)(Waddr)bb.rip, branch_type_names[bb.brtype], bb.bytes, bb.count, bb.tagcount,
+                         bb.memcount, bb.storecount);
 
     if (bb.repblock)
       out = std::format_to(out, " rep");

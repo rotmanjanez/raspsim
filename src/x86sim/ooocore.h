@@ -553,7 +553,8 @@ struct IssueQueue {
 #define foreach_list_mutable_linktype(L, obj, entry, nextentry, linktype)                                              \
   linktype* entry;                                                                                                     \
   linktype* nextentry;                                                                                                 \
-  for (entry = (L).next, nextentry = entry->next, __builtin_prefetch(entry->next), obj = (decltype(obj))entry; entry != &(L);    \
+  for (entry = (L).next, nextentry = entry->next, __builtin_prefetch(entry->next), obj = (decltype(obj))entry;         \
+       entry != &(L);                                                                                                  \
        entry = nextentry, nextentry = entry->next, __builtin_prefetch(nextentry), obj = (decltype(obj))entry)
 
 #define foreach_list_mutable(L, obj, entry, nextentry)                                                                 \
@@ -2104,8 +2105,8 @@ template<>
 struct formatter<x86sim::OutOfOrderModel::MemoryInterlockEntry> {
   constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
   auto format(const x86sim::OutOfOrderModel::MemoryInterlockEntry& entry, format_context& ctx) const {
-    return std::format_to(ctx.out(), "vcpu {}, threadid {}, uuid {}, rob {}", entry.vcpuid, entry.threadid,
-                          entry.uuid, entry.rob);
+    return std::format_to(ctx.out(), "vcpu {}, threadid {}, uuid {}, rob {}", entry.vcpuid, entry.threadid, entry.uuid,
+                          entry.rob);
   }
 };
 

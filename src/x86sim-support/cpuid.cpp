@@ -38,9 +38,9 @@ CpuidResult default_cpuid(CpuidRequest request, int vcpuid) noexcept {
 
   constexpr std::uint32_t ptlsim_x86_feature =
       x86_feature_fpu | x86_feature_pse | x86_feature_tsc | x86_feature_msr | x86_feature_pae | x86_feature_mce |
-      x86_feature_cx8 | x86_feature_apic | x86_feature_mca | x86_feature_cmov | x86_feature_pat |
-      x86_feature_pse36 | x86_feature_pn | x86_feature_clfl | x86_feature_nx | x86_feature_acpi | x86_feature_mmx |
-      x86_feature_fxsr | x86_feature_xmm | x86_feature_xmm2 | x86_feature_snoop | x86_feature_ht;
+      x86_feature_cx8 | x86_feature_apic | x86_feature_mca | x86_feature_cmov | x86_feature_pat | x86_feature_pse36 |
+      x86_feature_pn | x86_feature_clfl | x86_feature_nx | x86_feature_acpi | x86_feature_mmx | x86_feature_fxsr |
+      x86_feature_xmm | x86_feature_xmm2 | x86_feature_snoop | x86_feature_ht;
 
   constexpr std::uint32_t x86_ext_feature_xmm3 = (1 << 0);
   constexpr std::uint32_t x86_ext_feature_cx16 = (1 << 13);

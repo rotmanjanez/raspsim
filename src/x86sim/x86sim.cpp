@@ -201,8 +201,10 @@ int Context::write_segreg(unsigned int, W16) {
 void Context::update_shadow_segment_descriptors() {
   W64 limit = use64 ? 0xffffffffffffffffULL : 0xffffffffULL;
 
-  for (SegmentDescriptorCache* seg_cache : {&seg[segment_register_index(SegmentRegister::cs)], &seg[segment_register_index(SegmentRegister::ss)], &seg[segment_register_index(SegmentRegister::ds)], &seg[segment_register_index(SegmentRegister::es)],
-                                            &seg[segment_register_index(SegmentRegister::fs)], &seg[segment_register_index(SegmentRegister::gs)]}) {
+  for (SegmentDescriptorCache* seg_cache :
+       {&seg[segment_register_index(SegmentRegister::cs)], &seg[segment_register_index(SegmentRegister::ss)],
+        &seg[segment_register_index(SegmentRegister::ds)], &seg[segment_register_index(SegmentRegister::es)],
+        &seg[segment_register_index(SegmentRegister::fs)], &seg[segment_register_index(SegmentRegister::gs)]}) {
     seg_cache->present = 1;
     seg_cache->base = 0;
     seg_cache->limit = limit;
@@ -331,7 +333,8 @@ RunResult Machine::run(RunOptions options) {
 }
 
 Stats Machine::stats() const noexcept {
-  return machine_ ? Stats{.cycles = machine_->sim_cycle, .instructions = machine_->total_user_insns_committed} : Stats{};
+  return machine_ ? Stats{.cycles = machine_->sim_cycle, .instructions = machine_->total_user_insns_committed}
+                  : Stats{};
 }
 
 const Options& Machine::options() const noexcept {
@@ -397,8 +400,8 @@ void dispatch_syscall_64bit(Context& context) {
   advance_default_syscall_rip_if_unchanged(context, SyscallKind::syscall64, old_rip);
 
   if (!result.continue_execution) {
-    machine.set_pending_stop(
-        RunResult{.reason = result.reason, .stats = machine.stats(), .x86_exception = std::nullopt, .message = result.message});
+    machine.set_pending_stop(RunResult{
+        .reason = result.reason, .stats = machine.stats(), .x86_exception = std::nullopt, .message = result.message});
     requested_switch_to_native = 1;
   }
 }
@@ -412,8 +415,8 @@ void dispatch_syscall_32bit(Context& context, int semantics) {
   advance_default_syscall_rip_if_unchanged(context, kind, old_rip);
 
   if (!result.continue_execution) {
-    machine.set_pending_stop(
-        RunResult{.reason = result.reason, .stats = machine.stats(), .x86_exception = std::nullopt, .message = result.message});
+    machine.set_pending_stop(RunResult{
+        .reason = result.reason, .stats = machine.stats(), .x86_exception = std::nullopt, .message = result.message});
     requested_switch_to_native = 1;
   }
 }

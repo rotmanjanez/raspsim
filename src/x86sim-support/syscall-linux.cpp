@@ -228,7 +228,9 @@ SyscallResult unsupported_syscall(const RegisterFile& context, SyscallKind kind)
   return {.reason = StopReason::unsupported_syscall,
           .continue_execution = false,
           .message = "unsupported Linux syscall " + std::to_string(syscall_number(context)) + " via " +
-                     (kind == SyscallKind::syscall64 ? "syscall64" : kind == SyscallKind::int80 ? "int80" : "sysenter")};
+                     (kind == SyscallKind::syscall64 ? "syscall64"
+                      : kind == SyscallKind::int80   ? "int80"
+                                                     : "sysenter")};
 }
 
 [[nodiscard]] int memory_error_to_linux(MemoryError error) noexcept {
@@ -548,7 +550,8 @@ void write_le(std::array<std::byte, Size>& bytes, std::size_t offset, std::uint6
   return std::nullopt;
 }
 
-[[nodiscard]] std::optional<int> write_flock64(Machine& machine, address_t address, const struct flock& host_lock) noexcept {
+[[nodiscard]] std::optional<int> write_flock64(Machine& machine, address_t address,
+                                               const struct flock& host_lock) noexcept {
   std::array<std::byte, 32> bytes{};
   word_t type = linux_f_unlck;
   switch (host_lock.l_type) {
@@ -577,7 +580,8 @@ void write_le(std::array<std::byte, Size>& bytes, std::size_t offset, std::uint6
   return std::nullopt;
 }
 
-[[nodiscard]] std::optional<int> write_stat(Machine& machine, address_t address, const struct stat& host_stat) noexcept {
+[[nodiscard]] std::optional<int> write_stat(Machine& machine, address_t address,
+                                            const struct stat& host_stat) noexcept {
   std::array<std::byte, 144> bytes{};
   write_le(bytes, 0, static_cast<std::uint64_t>(host_stat.st_dev), 8);
   write_le(bytes, 8, static_cast<std::uint64_t>(host_stat.st_ino), 8);
@@ -746,7 +750,7 @@ void copy_c_string(std::array<std::byte, Size>& bytes, std::size_t offset, const
     return std::nullopt;
   }
 
-  struct flock host_lock {};
+  struct flock host_lock{};
   switch (read_le(bytes, 0, 2)) {
   case linux_f_rdlck:
     host_lock.l_type = F_RDLCK;
@@ -927,8 +931,8 @@ std::optional<SyscallResult> SysRead::try_syscall(Machine& machine, RegisterFile
     if (bytes_read == 0)
       return detail::return_value(context, 0);
 
-    auto written =
-        machine.write_memory(buffer_address, std::span<const std::byte>(buffer.data(), static_cast<std::size_t>(bytes_read)));
+    auto written = machine.write_memory(
+        buffer_address, std::span<const std::byte>(buffer.data(), static_cast<std::size_t>(bytes_read)));
     if (!written)
       return detail::return_error(context, detail::memory_error_to_linux(written.error()));
 
@@ -940,7 +944,8 @@ std::optional<SyscallResult> SysRead::try_syscall(Machine& machine, RegisterFile
   }
 }
 
-std::optional<SyscallResult> SysReadlink::try_syscall(Machine& machine, RegisterFile& context, SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysReadlink::try_syscall(Machine& machine, RegisterFile& context,
+                                                      SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_readlink) &&
       !detail::handles(context, kind, detail::syscall_readlinkat)) {
     return std::nullopt;
@@ -974,8 +979,8 @@ std::optional<SyscallResult> SysReadlink::try_syscall(Machine& machine, Register
     if (bytes_read < 0)
       return detail::return_error(context, detail::host_errno_to_linux(errno));
 
-    auto written =
-        machine.write_memory(buffer_address, std::span<const std::byte>(buffer.data(), static_cast<std::size_t>(bytes_read)));
+    auto written = machine.write_memory(
+        buffer_address, std::span<const std::byte>(buffer.data(), static_cast<std::size_t>(bytes_read)));
     if (!written)
       return detail::return_error(context, detail::memory_error_to_linux(written.error()));
 
@@ -1033,7 +1038,8 @@ std::optional<SyscallResult> SysWrite::try_syscall(Machine& machine, RegisterFil
   }
 }
 
-std::optional<SyscallResult> SysPreadPwrite::try_syscall(Machine& machine, RegisterFile& context, SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysPreadPwrite::try_syscall(Machine& machine, RegisterFile& context,
+                                                         SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_pread64) &&
       !detail::handles(context, kind, detail::syscall_pwrite64)) {
     return std::nullopt;
@@ -1062,8 +1068,8 @@ std::optional<SyscallResult> SysPreadPwrite::try_syscall(Machine& machine, Regis
       if (bytes_read == 0)
         return detail::return_value(context, 0);
 
-      auto written = machine.write_memory(buffer_address,
-                                          std::span<const std::byte>(buffer.data(), static_cast<std::size_t>(bytes_read)));
+      auto written = machine.write_memory(
+          buffer_address, std::span<const std::byte>(buffer.data(), static_cast<std::size_t>(bytes_read)));
       if (!written)
         return detail::return_error(context, detail::memory_error_to_linux(written.error()));
       return detail::return_value(context, bytes_read);
@@ -1178,7 +1184,7 @@ std::optional<SyscallResult> SysFstat::try_syscall(Machine& machine, RegisterFil
   if (!fd)
     return detail::return_error(context, detail::linux_ebadf);
 
-  struct stat host_stat {};
+  struct stat host_stat{};
   if (fstat(*fd, &host_stat) < 0)
     return detail::return_error(context, detail::host_errno_to_linux(errno));
 
@@ -1206,7 +1212,7 @@ std::optional<SyscallResult> SysStat::try_syscall(Machine& machine, RegisterFile
   if (!path.ok)
     return detail::return_error(context, path.error);
 
-  struct stat host_stat {};
+  struct stat host_stat{};
   int result = -1;
   if (is_newfstatat) {
     const word_t raw_dirfd = detail::syscall_arg(context, 0);
@@ -1237,7 +1243,8 @@ std::optional<SyscallResult> SysStat::try_syscall(Machine& machine, RegisterFile
   return detail::return_value(context, 0);
 }
 
-std::optional<SyscallResult> SysGetdents64::try_syscall(Machine& machine, RegisterFile& context, SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysGetdents64::try_syscall(Machine& machine, RegisterFile& context,
+                                                        SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_getdents64))
     return std::nullopt;
 
@@ -1331,7 +1338,8 @@ std::optional<SyscallResult> SysGetdents64::try_syscall(Machine& machine, Regist
   }
 }
 
-std::optional<SyscallResult> SysFileSystem::try_syscall(Machine& machine, RegisterFile& context, SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysFileSystem::try_syscall(Machine& machine, RegisterFile& context,
+                                                        SyscallKind kind) noexcept {
   const word_t number = detail::syscall_number(context);
   if (!detail::handles(context, kind, detail::syscall_access) &&
       !detail::handles(context, kind, detail::syscall_chdir) &&
@@ -1701,7 +1709,8 @@ std::optional<SyscallResult> SysSocket::try_syscall(Machine&, RegisterFile& cont
   return detail::return_value(context, fd);
 }
 
-std::optional<SyscallResult> SysConnect::try_syscall(Machine& machine, RegisterFile& context, SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysConnect::try_syscall(Machine& machine, RegisterFile& context,
+                                                     SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_connect))
     return std::nullopt;
 
@@ -1734,8 +1743,7 @@ std::optional<SyscallResult> SysConnect::try_syscall(Machine& machine, RegisterF
 #endif
       host_address.sun_family = AF_UNIX;
 
-      const std::size_t path_length =
-          std::min<std::size_t>(bytes.size() - 2, sizeof(host_address.sun_path) - 1);
+      const std::size_t path_length = std::min<std::size_t>(bytes.size() - 2, sizeof(host_address.sun_path) - 1);
       for (std::size_t i = 0; i < path_length; ++i)
         host_address.sun_path[i] = static_cast<char>(std::to_integer<unsigned char>(bytes[2 + i]));
 
@@ -1792,7 +1800,8 @@ std::optional<SyscallResult> SysConnect::try_syscall(Machine& machine, RegisterF
   }
 }
 
-std::optional<SyscallResult> SysSelect::try_syscall(Machine& machine, RegisterFile& context, SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysSelect::try_syscall(Machine& machine, RegisterFile& context,
+                                                    SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_select))
     return std::nullopt;
 
@@ -1831,7 +1840,8 @@ std::optional<SyscallResult> SysSelect::try_syscall(Machine& machine, RegisterFi
 
 std::optional<SyscallResult> SysProcess::try_syscall(Machine&, RegisterFile& context, SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_clone) && !detail::handles(context, kind, detail::syscall_fork) &&
-      !detail::handles(context, kind, detail::syscall_vfork) && !detail::handles(context, kind, detail::syscall_execve) &&
+      !detail::handles(context, kind, detail::syscall_vfork) &&
+      !detail::handles(context, kind, detail::syscall_execve) &&
       !detail::handles(context, kind, detail::syscall_wait4)) {
     return std::nullopt;
   }
@@ -1912,7 +1922,8 @@ std::optional<SyscallResult> SysBrk::try_syscall(Machine& machine, RegisterFile&
   return detail::return_value(context, static_cast<std::int64_t>(current_break));
 }
 
-std::optional<SyscallResult> SysArchPrctl::try_syscall(Machine& machine, RegisterFile& context, SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysArchPrctl::try_syscall(Machine& machine, RegisterFile& context,
+                                                       SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_arch_prctl))
     return std::nullopt;
 
@@ -1983,7 +1994,8 @@ std::optional<SyscallResult> SysUname::try_syscall(Machine& machine, RegisterFil
   return detail::return_value(context, 0);
 }
 
-std::optional<SyscallResult> SysGetcwd::try_syscall(Machine& machine, RegisterFile& context, SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysGetcwd::try_syscall(Machine& machine, RegisterFile& context,
+                                                    SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_getcwd))
     return std::nullopt;
 
@@ -2116,7 +2128,8 @@ std::optional<SyscallResult> SysRseq::try_syscall(Machine&, RegisterFile& contex
   return detail::return_error(context, detail::linux_enosys);
 }
 
-std::optional<SyscallResult> SysPrlimit64::try_syscall(Machine& machine, RegisterFile& context, SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysPrlimit64::try_syscall(Machine& machine, RegisterFile& context,
+                                                       SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_prlimit64))
     return std::nullopt;
 
@@ -2243,8 +2256,8 @@ std::optional<SyscallResult> SysMmap::try_syscall(Machine& machine, RegisterFile
       std::array<std::byte, Machine::kPageSize> buffer{};
       word_t total = 0;
       while (total < length) {
-        const auto chunk_size = static_cast<std::size_t>(
-            std::min<word_t>(length - total, static_cast<word_t>(buffer.size())));
+        const auto chunk_size =
+            static_cast<std::size_t>(std::min<word_t>(length - total, static_cast<word_t>(buffer.size())));
         const ssize_t bytes_read = pread(*fd, buffer.data(), chunk_size, static_cast<off_t>(offset + total));
         if (bytes_read < 0) {
           const int saved_errno = errno;
@@ -2271,7 +2284,8 @@ std::optional<SyscallResult> SysMmap::try_syscall(Machine& machine, RegisterFile
   return detail::return_value(context, static_cast<std::int64_t>(mapped_address));
 }
 
-std::optional<SyscallResult> SysMunmap::try_syscall(Machine& machine, RegisterFile& context, SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysMunmap::try_syscall(Machine& machine, RegisterFile& context,
+                                                    SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_munmap))
     return std::nullopt;
 
@@ -2288,7 +2302,8 @@ std::optional<SyscallResult> SysMunmap::try_syscall(Machine& machine, RegisterFi
   return detail::return_value(context, 0);
 }
 
-std::optional<SyscallResult> SysMremap::try_syscall(Machine& machine, RegisterFile& context, SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysMremap::try_syscall(Machine& machine, RegisterFile& context,
+                                                    SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_mremap))
     return std::nullopt;
 

@@ -199,10 +199,10 @@ struct std::formatter<x86sim::RegisterFile> {
   template<typename FormatContext>
   auto format(const x86sim::RegisterFile& registers, FormatContext& ctx) const {
     static constexpr x86sim::Register regs[] = {
-        x86sim::Register::rax, x86sim::Register::rbx, x86sim::Register::rcx, x86sim::Register::rdx,
-        x86sim::Register::rsp, x86sim::Register::rbp, x86sim::Register::rsi, x86sim::Register::rdi,
-        x86sim::Register::r8,  x86sim::Register::r9,  x86sim::Register::r10, x86sim::Register::r11,
-        x86sim::Register::r12, x86sim::Register::r13, x86sim::Register::r14, x86sim::Register::r15,
+        x86sim::Register::rax, x86sim::Register::rbx,   x86sim::Register::rcx, x86sim::Register::rdx,
+        x86sim::Register::rsp, x86sim::Register::rbp,   x86sim::Register::rsi, x86sim::Register::rdi,
+        x86sim::Register::r8,  x86sim::Register::r9,    x86sim::Register::r10, x86sim::Register::r11,
+        x86sim::Register::r12, x86sim::Register::r13,   x86sim::Register::r14, x86sim::Register::r15,
         x86sim::Register::rip, x86sim::Register::flags,
     };
 

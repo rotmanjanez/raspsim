@@ -195,7 +195,8 @@ void checked_write(x86sim::Machine& machine, address_t start, std::span<const st
     throw std::runtime_error(path.string() + " has truncated program headers");
 
   for (std::uint16_t i = 0; i < header.e_phnum; ++i) {
-    const Elf64Phdr& phdr = read_struct<Elf64Phdr>(file, header.e_phoff + static_cast<std::uint64_t>(i) * sizeof(Elf64Phdr));
+    const Elf64Phdr& phdr =
+        read_struct<Elf64Phdr>(file, header.e_phoff + static_cast<std::uint64_t>(i) * sizeof(Elf64Phdr));
     if (phdr.p_type == pt_interp)
       throw std::runtime_error(path.string() + " uses PT_INTERP; dynamic loading is not supported yet");
   }
@@ -208,7 +209,8 @@ void checked_write(x86sim::Machine& machine, address_t start, std::span<const st
   };
 
   for (std::uint16_t i = 0; i < header.e_phnum; ++i) {
-    const Elf64Phdr& phdr = read_struct<Elf64Phdr>(file, header.e_phoff + static_cast<std::uint64_t>(i) * sizeof(Elf64Phdr));
+    const Elf64Phdr& phdr =
+        read_struct<Elf64Phdr>(file, header.e_phoff + static_cast<std::uint64_t>(i) * sizeof(Elf64Phdr));
     if (phdr.p_type != pt_load || phdr.p_memsz == 0)
       continue;
     if (phdr.p_filesz > phdr.p_memsz)
@@ -239,7 +241,8 @@ void append_word(std::vector<std::byte>& bytes, word_t value) {
     bytes.push_back(static_cast<std::byte>((value >> (i * 8)) & 0xff));
 }
 
-[[nodiscard]] address_t setup_stack(x86sim::Machine& machine, std::span<const std::string> argv, const LoadedElf& loaded) {
+[[nodiscard]] address_t setup_stack(x86sim::Machine& machine, std::span<const std::string> argv,
+                                    const LoadedElf& loaded) {
   const address_t stack_base = stack_top - stack_size;
   checked_map(machine, stack_base, stack_size, x86sim::Protection::read | x86sim::Protection::write);
 
@@ -259,9 +262,9 @@ void append_word(std::vector<std::byte>& bytes, word_t value) {
 
   cursor -= 16;
   constexpr std::array<std::byte, 16> random_bytes{
-      std::byte{0x52}, std::byte{0x41}, std::byte{0x53}, std::byte{0x50}, std::byte{0x73}, std::byte{0x69}, std::byte{0x6d},
-      std::byte{0x21}, std::byte{0x10}, std::byte{0x32}, std::byte{0x54}, std::byte{0x76}, std::byte{0x98}, std::byte{0xba},
-      std::byte{0xdc}, std::byte{0xfe},
+      std::byte{0x52}, std::byte{0x41}, std::byte{0x53}, std::byte{0x50}, std::byte{0x73}, std::byte{0x69},
+      std::byte{0x6d}, std::byte{0x21}, std::byte{0x10}, std::byte{0x32}, std::byte{0x54}, std::byte{0x76},
+      std::byte{0x98}, std::byte{0xba}, std::byte{0xdc}, std::byte{0xfe},
   };
   checked_write(machine, cursor, random_bytes);
   const address_t random_address = cursor;
@@ -395,31 +398,20 @@ int main(int argc, char** argv) {
 
     int exit_status = 0;
     auto callbacks = x86sim::linux_syscalls::host(
-        x86sim::linux_syscalls::SysRead{} | x86sim::linux_syscalls::SysReadlink{} |
-        x86sim::linux_syscalls::SysWrite{} | x86sim::linux_syscalls::SysPreadPwrite{} |
-        x86sim::linux_syscalls::SysOpen{} |
-        x86sim::linux_syscalls::SysClose{} | x86sim::linux_syscalls::SysPipe{} |
-        x86sim::linux_syscalls::SysFstat{} |
-        x86sim::linux_syscalls::SysStat{} |
-        x86sim::linux_syscalls::SysGetdents64{} |
-        x86sim::linux_syscalls::SysFileSystem{} |
-        x86sim::linux_syscalls::SysLseek{} |
-        x86sim::linux_syscalls::SysIoctl{} | x86sim::linux_syscalls::SysFcntl{} |
-        x86sim::linux_syscalls::SysSocket{} |
-        x86sim::linux_syscalls::SysConnect{} |
-        x86sim::linux_syscalls::SysSelect{} |
-        x86sim::linux_syscalls::SysProcess{} |
-        x86sim::linux_syscalls::SysFutex{} |
-        x86sim::linux_syscalls::SysSignals{} |
-        x86sim::linux_syscalls::SysBrk{} |
+        x86sim::linux_syscalls::SysRead{} | x86sim::linux_syscalls::SysReadlink{} | x86sim::linux_syscalls::SysWrite{} |
+        x86sim::linux_syscalls::SysPreadPwrite{} | x86sim::linux_syscalls::SysOpen{} |
+        x86sim::linux_syscalls::SysClose{} | x86sim::linux_syscalls::SysPipe{} | x86sim::linux_syscalls::SysFstat{} |
+        x86sim::linux_syscalls::SysStat{} | x86sim::linux_syscalls::SysGetdents64{} |
+        x86sim::linux_syscalls::SysFileSystem{} | x86sim::linux_syscalls::SysLseek{} |
+        x86sim::linux_syscalls::SysIoctl{} | x86sim::linux_syscalls::SysFcntl{} | x86sim::linux_syscalls::SysSocket{} |
+        x86sim::linux_syscalls::SysConnect{} | x86sim::linux_syscalls::SysSelect{} |
+        x86sim::linux_syscalls::SysProcess{} | x86sim::linux_syscalls::SysFutex{} |
+        x86sim::linux_syscalls::SysSignals{} | x86sim::linux_syscalls::SysBrk{} |
         x86sim::linux_syscalls::SysArchPrctl{} | x86sim::linux_syscalls::SysGetIdentity{} |
-        x86sim::linux_syscalls::SysUname{} | x86sim::linux_syscalls::SysGetcwd{} |
-        x86sim::linux_syscalls::SysTime{} |
-        x86sim::linux_syscalls::SysSetTidAddress{} |
-        x86sim::linux_syscalls::SysSetRobustList{} | x86sim::linux_syscalls::SysRseq{} |
-        x86sim::linux_syscalls::SysPrlimit64{} |
-        x86sim::linux_syscalls::SysMmap{} | x86sim::linux_syscalls::SysMunmap{} |
-        x86sim::linux_syscalls::SysMremap{} |
+        x86sim::linux_syscalls::SysUname{} | x86sim::linux_syscalls::SysGetcwd{} | x86sim::linux_syscalls::SysTime{} |
+        x86sim::linux_syscalls::SysSetTidAddress{} | x86sim::linux_syscalls::SysSetRobustList{} |
+        x86sim::linux_syscalls::SysRseq{} | x86sim::linux_syscalls::SysPrlimit64{} | x86sim::linux_syscalls::SysMmap{} |
+        x86sim::linux_syscalls::SysMunmap{} | x86sim::linux_syscalls::SysMremap{} |
         x86sim::linux_syscalls::SysExit{&exit_status} | x86sim::linux_syscalls::SysExitGroup{&exit_status});
 
     x86sim::Options options;

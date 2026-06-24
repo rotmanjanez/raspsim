@@ -491,7 +491,7 @@ bool TraceDecoder::decode_fast() {
                    : (!count)              ? 0
                                            : // count == 0
                        (count == 1) ? (isrot ? (SETFLAG_OF | SETFLAG_CF) : (SETFLAG_ZF | SETFLAG_OF | SETFLAG_CF))
-                                                 :                         // count == 1
+                                    :                                      // count == 1
                        (isrot ? (SETFLAG_CF) : (SETFLAG_ZF | SETFLAG_CF)); // count > 1
 
     static const byte translate_opcode[8] = {OP_rotl, OP_rotr, OP_rotcl, OP_rotcr, OP_shl, OP_shr, OP_shl, OP_sar};

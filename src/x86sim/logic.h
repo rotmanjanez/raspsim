@@ -340,7 +340,6 @@ struct FullyAssociativeTags {
 
   T& operator[](int index) { return tags[index]; }
   int operator()(T target) { return probe(target); }
-
 };
 
 } // namespace x86sim
@@ -565,7 +564,8 @@ template<int Size, int Width, int PadSize>
 struct std::formatter<x86sim::FullyAssociativeTagsNbitOneHot<Size, Width, PadSize>> {
   constexpr auto parse(std::format_parse_context& ctx) { return ctx.begin(); }
 
-  auto format(const x86sim::FullyAssociativeTagsNbitOneHot<Size, Width, PadSize>& tags, std::format_context& ctx) const {
+  auto format(const x86sim::FullyAssociativeTagsNbitOneHot<Size, Width, PadSize>& tags,
+              std::format_context& ctx) const {
     using namespace x86sim;
     auto out = ctx.out();
     for (int i = 0; i < Size; i++) {
@@ -727,10 +727,12 @@ template<typename T, typename V, int setcount, int waycount, int linesize, typen
 struct std::formatter<x86sim::AssociativeArray<T, V, setcount, waycount, linesize, stats>> {
   constexpr auto parse(std::format_parse_context& ctx) { return ctx.begin(); }
 
-  auto format(const x86sim::AssociativeArray<T, V, setcount, waycount, linesize, stats>& arr, std::format_context& ctx) const {
+  auto format(const x86sim::AssociativeArray<T, V, setcount, waycount, linesize, stats>& arr,
+              std::format_context& ctx) const {
     using namespace x86sim;
     auto out = ctx.out();
-    out = std::format_to(out, "x86sim::AssociativeArray<{} sets, {} ways, {}-byte lines>:\n", setcount, waycount, linesize);
+    out = std::format_to(out, "x86sim::AssociativeArray<{} sets, {} ways, {}-byte lines>:\n", setcount, waycount,
+                         linesize);
     for (int set = 0; set < setcount; set++) {
       out = std::format_to(out, "  Set {}:\n", set);
       out = std::format_to(out, "{}", arr.sets[set]);
@@ -861,7 +863,6 @@ struct LockableFullyAssociativeTags {
 
   T& operator[](int index) { return tags[index]; }
   int operator()(T target) { return probe(target); }
-
 };
 
 } // namespace x86sim
@@ -1108,8 +1109,8 @@ struct std::formatter<x86sim::LockableAssociativeArray<T, V, setcount, waycount,
               std::format_context& ctx) const {
     using namespace x86sim;
     auto out = ctx.out();
-    out = std::format_to(out, "x86sim::LockableAssociativeArray<{} sets, {} ways, {}-byte lines>:\n", setcount, waycount,
-                         linesize);
+    out = std::format_to(out, "x86sim::LockableAssociativeArray<{} sets, {} ways, {}-byte lines>:\n", setcount,
+                         waycount, linesize);
     for (int set = 0; set < setcount; set++) {
       out = std::format_to(out, "  Set {}:\n", set);
       out = std::format_to(out, "{}", arr.sets[set]);

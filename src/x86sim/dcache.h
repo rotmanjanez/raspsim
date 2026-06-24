@@ -455,7 +455,9 @@ struct LoadFillReqQueue {
 
   static const int SIZE = size;
 
-  LoadFillReqQueue(MachineImpl& machine_, CacheHierarchy& hierarchy_) : machine(machine_), hierarchy(&hierarchy_) { reset(); }
+  LoadFillReqQueue(MachineImpl& machine_, CacheHierarchy& hierarchy_) : machine(machine_), hierarchy(&hierarchy_) {
+    reset();
+  }
 
   // Clear entries belonging to one thread
   void reset(int threadid);
@@ -565,7 +567,9 @@ struct CacheHierarchy {
 
   PerCoreCacheCallbacks* callback;
 
-  explicit CacheHierarchy(MachineImpl& machine_) : machine(machine_), lfrq(machine_, *this), missbuf(machine_, *this) { callback = null; }
+  explicit CacheHierarchy(MachineImpl& machine_) : machine(machine_), lfrq(machine_, *this), missbuf(machine_, *this) {
+    callback = null;
+  }
 
   bool probe_cache_and_sfr(W64 addr, const SFR* sfra, int sizeshift);
   bool covered_by_sfr(W64 addr, SFR* sfr, int sizeshift);
@@ -757,12 +761,10 @@ struct formatter<x86sim::CacheSubsystem::MissBuffer<Size>> {
       if likely (mb.freemap[i])
         continue;
       const auto& entry = mb.missbufs[i];
-      out =
-          std::format_to(out, "slot {:>2}: vcpu {}, addr {} state {:<8} {} {} on {} cycles -> lfrq {}\n", i,
-                         entry.threadid, (void*)(x86sim::Waddr)entry.addr,
-                         x86sim::CacheSubsystem::missbuf_state_names[entry.state],
-                         (entry.dcache ? "dcache" : " "), (entry.icache ? "icache" : " "), entry.cycles,
-                         entry.lfrqmap.to_string());
+      out = std::format_to(out, "slot {:>2}: vcpu {}, addr {} state {:<8} {} {} on {} cycles -> lfrq {}\n", i,
+                           entry.threadid, (void*)(x86sim::Waddr)entry.addr,
+                           x86sim::CacheSubsystem::missbuf_state_names[entry.state], (entry.dcache ? "dcache" : " "),
+                           (entry.icache ? "icache" : " "), entry.cycles, entry.lfrqmap.to_string());
     }
     return out;
   }
@@ -792,7 +794,8 @@ struct formatter<std::pair<x86sim::CacheSubsystem::CacheLine<linesize>, x86sim::
 template<int linesize>
 struct formatter<std::pair<x86sim::CacheSubsystem::CacheLineWithValidMask<linesize>, x86sim::W64>> {
   constexpr auto parse(format_parse_context& ctx) { return ctx.begin(); }
-  auto format(const std::pair<x86sim::CacheSubsystem::CacheLineWithValidMask<linesize>, x86sim::W64>& p, format_context& ctx) const;
+  auto format(const std::pair<x86sim::CacheSubsystem::CacheLineWithValidMask<linesize>, x86sim::W64>& p,
+              format_context& ctx) const;
 };
 
 } // namespace std
