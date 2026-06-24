@@ -51,6 +51,10 @@ struct SysClose {
   [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, RegisterFile&, SyscallKind) noexcept;
 };
 
+struct SysPipe {
+  [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, RegisterFile&, SyscallKind) noexcept;
+};
+
 struct SysFstat {
   [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, RegisterFile&, SyscallKind) noexcept;
 };
@@ -83,6 +87,18 @@ struct SysConnect {
   [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, RegisterFile&, SyscallKind) noexcept;
 };
 
+struct SysSelect {
+  [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, RegisterFile&, SyscallKind) noexcept;
+};
+
+struct SysProcess {
+  [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, RegisterFile&, SyscallKind) noexcept;
+};
+
+struct SysFutex {
+  [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, RegisterFile&, SyscallKind) noexcept;
+};
+
 struct SysSignals {
   [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, RegisterFile&, SyscallKind) noexcept;
 };
@@ -111,6 +127,10 @@ struct SysUname {
 };
 
 struct SysGetcwd {
+  [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, RegisterFile&, SyscallKind) noexcept;
+};
+
+struct SysTime {
   [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, RegisterFile&, SyscallKind) noexcept;
 };
 
@@ -171,6 +191,19 @@ struct SysMmap {
 };
 
 struct SysMunmap {
+  [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, RegisterFile&, SyscallKind) noexcept;
+};
+
+struct SysMremap {
+  constexpr explicit SysMremap(address_t next_mapping_address = detail::default_mmap_base + 0x8000000000ULL) noexcept
+      : next_mapping_address(next_mapping_address) {}
+
+  [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, RegisterFile&, SyscallKind) noexcept;
+
+  address_t next_mapping_address;
+};
+
+struct SysGetdents64 {
   [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, RegisterFile&, SyscallKind) noexcept;
 };
 

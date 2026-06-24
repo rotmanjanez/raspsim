@@ -398,21 +398,28 @@ int main(int argc, char** argv) {
         x86sim::linux_syscalls::SysRead{} | x86sim::linux_syscalls::SysReadlink{} |
         x86sim::linux_syscalls::SysWrite{} | x86sim::linux_syscalls::SysPreadPwrite{} |
         x86sim::linux_syscalls::SysOpen{} |
-        x86sim::linux_syscalls::SysClose{} | x86sim::linux_syscalls::SysFstat{} |
+        x86sim::linux_syscalls::SysClose{} | x86sim::linux_syscalls::SysPipe{} |
+        x86sim::linux_syscalls::SysFstat{} |
         x86sim::linux_syscalls::SysStat{} |
+        x86sim::linux_syscalls::SysGetdents64{} |
         x86sim::linux_syscalls::SysFileSystem{} |
         x86sim::linux_syscalls::SysLseek{} |
         x86sim::linux_syscalls::SysIoctl{} | x86sim::linux_syscalls::SysFcntl{} |
         x86sim::linux_syscalls::SysSocket{} |
         x86sim::linux_syscalls::SysConnect{} |
+        x86sim::linux_syscalls::SysSelect{} |
+        x86sim::linux_syscalls::SysProcess{} |
+        x86sim::linux_syscalls::SysFutex{} |
         x86sim::linux_syscalls::SysSignals{} |
         x86sim::linux_syscalls::SysBrk{} |
         x86sim::linux_syscalls::SysArchPrctl{} | x86sim::linux_syscalls::SysGetIdentity{} |
         x86sim::linux_syscalls::SysUname{} | x86sim::linux_syscalls::SysGetcwd{} |
+        x86sim::linux_syscalls::SysTime{} |
         x86sim::linux_syscalls::SysSetTidAddress{} |
         x86sim::linux_syscalls::SysSetRobustList{} | x86sim::linux_syscalls::SysRseq{} |
         x86sim::linux_syscalls::SysPrlimit64{} |
         x86sim::linux_syscalls::SysMmap{} | x86sim::linux_syscalls::SysMunmap{} |
+        x86sim::linux_syscalls::SysMremap{} |
         x86sim::linux_syscalls::SysExit{&exit_status} | x86sim::linux_syscalls::SysExitGroup{&exit_status});
 
     x86sim::Options options;
