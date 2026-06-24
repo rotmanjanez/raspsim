@@ -78,7 +78,7 @@
 
 #include "globals.h"
 #include "logic.h"
-#include "x86sim/registerfile.hpp"
+#include "x86sim/x86sim.hpp"
 
 namespace x86sim {
 
@@ -512,10 +512,6 @@ struct SegmentDescriptor {
   }
 } packedstruct;
 
-// Encoding of segment numbers:
-enum { SEGID_ES = 0, SEGID_CS = 1, SEGID_SS = 2, SEGID_DS = 3, SEGID_FS = 4, SEGID_GS = 5, SEGID_COUNT = 6 };
-
-
 struct SegmentDescriptorCache {
   W32 selector;
   W32 present : 1, use64 : 1, use32 : 1, supervisor : 1, dpl : 2;
@@ -623,7 +619,7 @@ struct ContextBase : RegisterFile {
   MachineImpl* machine_impl = nullptr;
 
   int vcpuid;
-  SegmentDescriptorCache seg[SEGID_COUNT];
+  SegmentDescriptorCache seg[segment_register_count];
   W64 swapgs_base;
 
   W64 fpstack[8];
@@ -707,12 +703,12 @@ struct Context : public ContextBase {
     use64 = 1;
     commitarf[REG_rip] = 0x100000;
 
-    seg[SEGID_CS].selector = 0x33;
-    seg[SEGID_SS].selector = 0x2b;
-    seg[SEGID_DS].selector = 0x00;
-    seg[SEGID_ES].selector = 0x00;
-    seg[SEGID_FS].selector = 0x00;
-    seg[SEGID_GS].selector = 0x00;
+    seg[segment_register_index(SegmentRegister::cs)].selector = 0x33;
+    seg[segment_register_index(SegmentRegister::ss)].selector = 0x2b;
+    seg[segment_register_index(SegmentRegister::ds)].selector = 0x00;
+    seg[segment_register_index(SegmentRegister::es)].selector = 0x00;
+    seg[segment_register_index(SegmentRegister::fs)].selector = 0x00;
+    seg[segment_register_index(SegmentRegister::gs)].selector = 0x00;
     update_shadow_segment_descriptors();
 
     running = 1;
@@ -1446,12 +1442,12 @@ struct std::formatter<x86sim::Context> {
     }
 
     out = std::format_to(out, "  Segment Registers:\n");
-    out = std::format_to(out, "    cs {}\n", ctx.seg[SEGID_CS]);
-    out = std::format_to(out, "    ss {}\n", ctx.seg[SEGID_SS]);
-    out = std::format_to(out, "    ds {}\n", ctx.seg[SEGID_DS]);
-    out = std::format_to(out, "    es {}\n", ctx.seg[SEGID_ES]);
-    out = std::format_to(out, "    fs {}\n", ctx.seg[SEGID_FS]);
-    out = std::format_to(out, "    gs {}\n", ctx.seg[SEGID_GS]);
+    out = std::format_to(out, "    cs {}\n", ctx.seg[segment_register_index(SegmentRegister::cs)]);
+    out = std::format_to(out, "    ss {}\n", ctx.seg[segment_register_index(SegmentRegister::ss)]);
+    out = std::format_to(out, "    ds {}\n", ctx.seg[segment_register_index(SegmentRegister::ds)]);
+    out = std::format_to(out, "    es {}\n", ctx.seg[segment_register_index(SegmentRegister::es)]);
+    out = std::format_to(out, "    fs {}\n", ctx.seg[segment_register_index(SegmentRegister::fs)]);
+    out = std::format_to(out, "    gs {}\n", ctx.seg[segment_register_index(SegmentRegister::gs)]);
 
     out = std::format_to(out, "  FPU:\n");
     out = std::format_to(out, "    FP Control Word: {}\n", ctx.fpcw);

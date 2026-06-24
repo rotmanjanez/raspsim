@@ -946,17 +946,14 @@ void TraceDecoder::abs_code_addr_immediate(int rdreg, int sizeshift, W64 imm) {
 
 int TraceDecoder::bias_by_segreg(int basereg) {
   if (prefixes & (PFX_CS | PFX_DS | PFX_ES | PFX_FS | PFX_GS | PFX_SS)) {
-    int segid = (prefixes & PFX_FS)   ? SEGID_FS
-                : (prefixes & PFX_GS) ? SEGID_GS
-                : (prefixes & PFX_DS) ? SEGID_DS
-                : (prefixes & PFX_SS) ? SEGID_SS
-                : (prefixes & PFX_ES) ? SEGID_ES
-                : (prefixes & PFX_CS) ? SEGID_CS
-                                      : -1;
+    const SegmentRegister segment = (prefixes & PFX_FS)   ? SegmentRegister::fs
+                                    : (prefixes & PFX_GS) ? SegmentRegister::gs
+                                    : (prefixes & PFX_DS) ? SegmentRegister::ds
+                                    : (prefixes & PFX_SS) ? SegmentRegister::ss
+                                    : (prefixes & PFX_ES) ? SegmentRegister::es
+                                                          : SegmentRegister::cs;
 
-    assert(segid >= 0);
-
-    int varoffs = offsetof_(Context, seg[segid].base);
+    int varoffs = offsetof_(Context, seg[segment_register_index(segment)].base);
 
     TransOp ldp(OP_ld, REG_temp6, REG_ctx, REG_imm, REG_zero, 3, varoffs);
     ldp.internal = 1;
@@ -2122,8 +2119,8 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, const RIPVirtPhys& rvp) {
   AddressSpace& asp = ctx.machine->address_space();
   Options& config = ctx.machine_impl->config;
 
-  if unlikely ((rvp.rip == config.start_log_at_rip) && (rvp.rip != 0xffffffffffffffffULL)) {
-    config.start_log_at_iteration = 0;
+  if unlikely ((rvp.rip == config.log.start_log_at_rip) && (rvp.rip != 0xffffffffffffffffULL)) {
+    config.log.start_log_at_iteration = 0;
     logenable = 1;
   }
 
@@ -2253,8 +2250,8 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, const RIPVirtPhys& rvp) {
 void BasicBlockCache::translate_in_place(BasicBlock& targetbb, Context& ctx, Waddr rip) {
   Options& config = ctx.machine_impl->config;
 
-  if unlikely ((rip == config.start_log_at_rip) && (rip != MAX_RIP)) {
-    config.start_log_at_iteration = 0;
+  if unlikely ((rip == config.log.start_log_at_rip) && (rip != MAX_RIP)) {
+    config.log.start_log_at_iteration = 0;
     logenable = 1;
   }
 
@@ -2291,8 +2288,8 @@ void BasicBlockCache::translate_in_place(BasicBlock& targetbb, Context& ctx, Wad
 BasicBlock* BasicBlockCache::translate_and_clone(Context& ctx, Waddr rip) {
   Options& config = ctx.machine_impl->config;
 
-  if unlikely ((rip == config.start_log_at_rip) && (rip != MAX_RIP)) {
-    config.start_log_at_iteration = 0;
+  if unlikely ((rip == config.log.start_log_at_rip) && (rip != MAX_RIP)) {
+    config.log.start_log_at_iteration = 0;
     logenable = 1;
   }
 

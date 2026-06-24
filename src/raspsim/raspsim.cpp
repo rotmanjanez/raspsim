@@ -135,9 +135,9 @@ bool handle_config_arg(x86sim::Machine* machine, x86sim::RegisterFile* registers
   } else if (toks[0] == "Fnosse") {
     options.sse = false;
   } else if (toks[0] == "Fnocache") {
-    options.perfect_cache = true;
+    options.debug.perfect_cache = true;
   } else if (toks[0] == "Fstbrpred") {
-    options.static_branchpred = true;
+    options.debug.static_branchpred = true;
   } else if (machine == nullptr || registers == nullptr) {
     return false;
   } else if (toks[0][0] == 'M') {
@@ -278,11 +278,12 @@ int main(int argc, char** argv) {
   logging::eprintln("End state:\n{}", registers);
 
   for (x86sim::address_t addr : dump_pages) {
-    if (auto page = machine.read_memory(addr, x86sim::Machine::kPageSize)) {
+    std::vector<std::byte> page(x86sim::Machine::kPageSize);
+    if (auto read = machine.read_memory_into(addr, page)) {
       logging::eprintln("Dump of memory at {}:", (void*)addr);
-      print_hex_bytes(*page);
+      print_hex_bytes(page);
     } else {
-      logging::eprintln("Error dumping memory at {}: {}", (void*)addr, page.error());
+      logging::eprintln("Error dumping memory at {}: {}", (void*)addr, read.error());
     }
   }
 

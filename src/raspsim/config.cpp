@@ -282,33 +282,33 @@ void ConfigurationParser<x86sim::Options>::setup() {
 
   section("General Logging Control");
   add(quiet, "quiet", "Do not print PTLsim system information banner");
-  add(log_filename, "logfile", "Log filename (use /dev/fd/1 for stdout, /dev/fd/2 for stderr)");
-  add(loglevel, "loglevel", "Log level (0 to 99)");
-  add(start_log_at_iteration, "startlog", "Start logging after iteration <startlog>");
-  add(start_log_at_rip, "startlogrip", "Start logging after first translation of basic block starting at rip");
-  add(log_on_console, "consolelog", "Replicate log file messages to console");
-  add(log_ptlsim_boot, "bootlog", "Log PTLsim early boot and injection process (for debugging)");
-  add(log_buffer_size, "logbufsize", "Size of PTLsim logfile buffer (not related to -ringbuf)");
-  add(dump_state_now, "dump-state-now", "Dump the event log ring buffer and internal state of the active core");
-  add(abort_at_end, "abort-at-end", "Abort current simulation after next command (don't wait for next x86 boundary)");
-  add(mm_logfile, "mm-logfile", "Log PTLsim memory manager requests (alloc, free) to this file (use with ptlmmlog)");
-  add(mm_log_buffer_size, "mm-logbuf-size", "Size of PTLsim memory manager log buffer (in events, not bytes)");
-  add(enable_inline_mm_logging, "mm-log-inline", "Print every memory manager request in the main log file");
-  add(enable_mm_validate, "mm-validate", "Validate every memory manager request against internal structures (slow)");
+  add(log.log_filename, "logfile", "Log filename (use /dev/fd/1 for stdout, /dev/fd/2 for stderr)");
+  add(log.loglevel, "loglevel", "Log level (0 to 99)");
+  add(log.start_log_at_iteration, "startlog", "Start logging after iteration <startlog>");
+  add(log.start_log_at_rip, "startlogrip", "Start logging after first translation of basic block starting at rip");
+  add(log.log_on_console, "consolelog", "Replicate log file messages to console");
+  add(log.log_ptlsim_boot, "bootlog", "Log PTLsim early boot and injection process (for debugging)");
+  add(log.log_buffer_size, "logbufsize", "Size of PTLsim logfile buffer (not related to -ringbuf)");
+  add(debug.dump_state_now, "dump-state-now", "Dump the event log ring buffer and internal state of the active core");
+  add(debug.abort_at_end, "abort-at-end", "Abort current simulation after next command (don't wait for next x86 boundary)");
+  add(log.mm_logfile, "mm-logfile", "Log PTLsim memory manager requests (alloc, free) to this file (use with ptlmmlog)");
+  add(log.mm_log_buffer_size, "mm-logbuf-size", "Size of PTLsim memory manager log buffer (in events, not bytes)");
+  add(log.enable_inline_mm_logging, "mm-log-inline", "Print every memory manager request in the main log file");
+  add(log.enable_mm_validate, "mm-validate", "Validate every memory manager request against internal structures (slow)");
 
   section("Event Ring Buffer Logging Control");
-  add(event_log_enabled, "ringbuf", "Log all core events to the ring buffer for backwards-in-time debugging");
-  add(event_log_ring_buffer_size, "ringbuf-size", "Core event log ring buffer size: only save last <ringbuf> entries");
-  add(flush_event_log_every_cycle, "flush-events", "Flush event log ring buffer to logfile after every cycle");
-  add(log_backwards_from_trigger_rip, "ringbuf-trigger-rip",
+  add(log.event_log_enabled, "ringbuf", "Log all core events to the ring buffer for backwards-in-time debugging");
+  add(log.event_log_ring_buffer_size, "ringbuf-size", "Core event log ring buffer size: only save last <ringbuf> entries");
+  add(log.flush_event_log_every_cycle, "flush-events", "Flush event log ring buffer to logfile after every cycle");
+  add(log.log_backwards_from_trigger_rip, "ringbuf-trigger-rip",
       "Print event ring buffer when first uop in this rip is committed");
 
   // Userspace only
   section("Start Point");
-  add(start_at_rip, "startrip", "Start at rip <startrip>");
-  add(include_dyn_linker, "excludeld", "Exclude dynamic linker execution");
-  add(trigger_mode, "trigger", "Trigger mode: wait for user process to do simcall before entering PTL mode");
-  add(pause_at_startup, "pause-at-startup", "Pause for N seconds after starting up (to allow debugger to attach)");
+  add(debug.start_at_rip, "startrip", "Start at rip <startrip>");
+  add(debug.include_dyn_linker, "excludeld", "Exclude dynamic linker execution");
+  add(debug.trigger_mode, "trigger", "Trigger mode: wait for user process to do simcall before entering PTL mode");
+  add(debug.pause_at_startup, "pause-at-startup", "Pause for N seconds after starting up (to allow debugger to attach)");
 
   section("Trace Stop Point");
   add(stop_at_user_insns, "stopinsns", "Stop after executing <stopinsns> user instructions");
@@ -316,13 +316,13 @@ void ConfigurationParser<x86sim::Options>::setup() {
   add(stop_at_rip, "stoprip", "Stop before rip <stoprip> is translated for the first time");
 
   section("Out of Order Core (ooocore)");
-  add(perfect_cache, "perfect-cache", "Perfect cache performance: all loads and stores hit in L1");
-  add(static_branchpred, "static-branchpred", "Use static branch prediction when there is no BTB entry");
+  add(debug.perfect_cache, "perfect-cache", "Perfect cache performance: all loads and stores hit in L1");
+  add(debug.static_branchpred, "static-branchpred", "Use static branch prediction when there is no BTB entry");
 
   section("Miscellaneous");
-  add(bbcache_dump_filename, "bbdump", "Basic block cache dump filename");
-  add(sequential_mode_insns, "seq", "Run in sequential mode for <seq> instructions before switching to out of order");
-  add(exit_after_fullsim, "exitend", "Kill the thread after full simulation completes rather than going native");
+  add(debug.bbcache_dump_filename, "bbdump", "Basic block cache dump filename");
+  add(debug.sequential_mode_insns, "seq", "Run in sequential mode for <seq> instructions before switching to out of order");
+  add(debug.exit_after_fullsim, "exitend", "Kill the thread after full simulation completes rather than going native");
 };
 
 void print_usage(int argc, char** argv) {

@@ -47,8 +47,8 @@ std::string current_log_filename;
 std::string current_bbcache_dump_filename;
 
 void backup_and_reopen_logfile(const Options& options) {
-  if (!options.log_filename.empty()) {
-    std::string log_filename = options.log_filename.string();
+  if (!options.log.log_filename.empty()) {
+    std::string log_filename = options.log.log_filename.string();
 
     // Close existing log
     logging::flush();
@@ -65,64 +65,64 @@ void backup_and_reopen_logfile(const Options& options) {
 
 void force_logging_enabled(Options& options) {
   logenable = 1;
-  options.start_log_at_iteration = 0;
-  options.loglevel = static_cast<int>(logging::Level::VERBOSE); // Maximum verbosity
+  options.log.start_log_at_iteration = 0;
+  options.log.loglevel = static_cast<int>(logging::Level::VERBOSE); // Maximum verbosity
   logging::set_level(logging::VERBOSE);
-  options.flush_event_log_every_cycle = 1;
+  options.log.flush_event_log_every_cycle = 1;
 }
 
 bool handle_config_change(Options& options, int argc, char** argv) {
   static bool first_time = true;
 
-  std::string log_filename = options.log_filename.string();
-  if (!options.log_filename.empty() && (log_filename != current_log_filename)) {
+  std::string log_filename = options.log.log_filename.string();
+  if (!options.log.log_filename.empty() && (log_filename != current_log_filename)) {
     // Can also use "-logfile /dev/fd/1" to send to stdout (or /dev/fd/2 for stderr):
     backup_and_reopen_logfile(options);
     current_log_filename = log_filename;
   }
 
   // Set log level in the new logging system
-  logging::set_level(static_cast<int>(options.loglevel));
+  logging::set_level(static_cast<int>(options.log.loglevel));
 
-  if ((options.loglevel > 0) & (options.start_log_at_rip == INVALIDRIP) &
-      (options.start_log_at_iteration == std::numeric_limits<W64s>::max())) {
-    options.start_log_at_iteration = 0;
+  if ((options.log.loglevel > 0) & (options.log.start_log_at_rip == INVALIDRIP) &
+      (options.log.start_log_at_iteration == std::numeric_limits<W64s>::max())) {
+    options.log.start_log_at_iteration = 0;
   }
 
   // Force printing every cycle if loglevel <= TRACE (5):
   // (Note: new system has inverted semantics - lower numbers = more verbose)
-  if (options.loglevel <= static_cast<int>(logging::Level::TRACE)) {
-    options.event_log_enabled = 1;
-    options.flush_event_log_every_cycle = 1;
+  if (options.log.loglevel <= static_cast<int>(logging::Level::TRACE)) {
+    options.log.event_log_enabled = 1;
+    options.log.flush_event_log_every_cycle = 1;
   }
 
   //
   // Fix up parameter defaults:
   //
-  if (options.start_log_at_rip != INVALIDRIP) {
-    options.start_log_at_iteration = std::numeric_limits<W64s>::max();
+  if (options.log.start_log_at_rip != INVALIDRIP) {
+    options.log.start_log_at_iteration = std::numeric_limits<W64s>::max();
     logenable = 0;
-  } else if (options.start_log_at_iteration != std::numeric_limits<W64s>::max()) {
-    options.start_log_at_rip = INVALIDRIP;
+  } else if (options.log.start_log_at_iteration != std::numeric_limits<W64s>::max()) {
+    options.log.start_log_at_rip = INVALIDRIP;
     logenable = 0;
   }
 
   logenable = 1;
 
-  if (!options.bbcache_dump_filename.empty() && (options.bbcache_dump_filename != current_bbcache_dump_filename)) {
+  if (!options.debug.bbcache_dump_filename.empty() && (options.debug.bbcache_dump_filename != current_bbcache_dump_filename)) {
     // Can also use "-logfile /dev/fd/1" to send to stdout (or /dev/fd/2 for stderr):
     if (bbcache_dump_file)
       std::fclose(bbcache_dump_file);
-    bbcache_dump_file = std::fopen(options.bbcache_dump_filename.c_str(), "wb");
+    bbcache_dump_file = std::fopen(options.debug.bbcache_dump_filename.c_str(), "wb");
     if (!bbcache_dump_file) {
-      logging::println(logging::WARNING, "Cannot open bb dump file '{}'", options.bbcache_dump_filename);
+      logging::println(logging::WARNING, "Cannot open bb dump file '{}'", options.debug.bbcache_dump_filename);
     }
-    current_bbcache_dump_filename = options.bbcache_dump_filename;
+    current_bbcache_dump_filename = options.debug.bbcache_dump_filename;
   }
 
-  options.start_log_at_rip = signext64(options.start_log_at_rip, 48);
-  options.log_backwards_from_trigger_rip = signext64(options.log_backwards_from_trigger_rip, 48);
-  options.start_at_rip = signext64(options.start_at_rip, 48);
+  options.log.start_log_at_rip = signext64(options.log.start_log_at_rip, 48);
+  options.log.log_backwards_from_trigger_rip = signext64(options.log.log_backwards_from_trigger_rip, 48);
+  options.debug.start_at_rip = signext64(options.debug.start_at_rip, 48);
   options.stop_at_rip = signext64(options.stop_at_rip, 48);
 
   if (first_time) {

@@ -438,10 +438,10 @@ bool OutOfOrderCore::runcycle() {
   //
   // Flush event log ring buffer
   //
-  if unlikely (config.event_log_enabled) {
+  if unlikely (config.log.event_log_enabled) {
     logging::println(logging::INFO, "[cycle {}] Miss buffer contents:", machine.sim_cycle);
     logging::println(logging::INFO, "{}", caches.missbuf);
-    if unlikely (config.flush_event_log_every_cycle) {
+    if unlikely (config.log.flush_event_log_every_cycle) {
       eventlog.flush(true);
     }
   }
@@ -1003,7 +1003,7 @@ void EventLog::print(bool only_to_tail) {
   W64 cycle = std::numeric_limits<W64>::max();
   size_t bufsize = end - start;
 
-  if (!config.flush_event_log_every_cycle)
+  if (!config.log.flush_event_log_every_cycle)
     logging::println(logging::INFO, "#-------- Start of event log --------");
 
   foreach (i, (only_to_tail ? (tail - start) : bufsize)) {
@@ -1025,7 +1025,7 @@ void EventLog::print(bool only_to_tail) {
     p++;
   }
 
-  if (!config.flush_event_log_every_cycle)
+  if (!config.log.flush_event_log_every_cycle)
     logging::println(logging::INFO, "#-------- End of event log --------");
 }
 
@@ -1707,8 +1707,8 @@ int OutOfOrderMachine::run() {
   // All VCPUs are running:
   stopped = 0;
 
-  if unlikely (this->iterations >= config.start_log_at_iteration) {
-    logging::println("Start logging at level {} in cycle {}", config.loglevel, this->iterations);
+  if unlikely (this->iterations >= config.log.start_log_at_iteration) {
+    logging::println("Start logging at level {} in cycle {}", config.log.loglevel, this->iterations);
     logging::flush();
 
     logenable = 1;
@@ -1719,17 +1719,17 @@ int OutOfOrderMachine::run() {
 
   logging::println("IssueQueue states:");
 
-  if unlikely (config.event_log_enabled && (!cores[0]->eventlog.start)) {
-    cores[0]->eventlog.init(config.event_log_ring_buffer_size);
+  if unlikely (config.log.event_log_enabled && (!cores[0]->eventlog.start)) {
+    cores[0]->eventlog.init(config.log.event_log_ring_buffer_size);
   }
 
   bool exiting = false;
   bool stopping = false;
 
   for (;;) {
-    if unlikely (this->iterations >= config.start_log_at_iteration) {
+    if unlikely (this->iterations >= config.log.start_log_at_iteration) {
       if unlikely (!logenable) {
-        logging::println("Start logging at level {} in cycle {}", config.loglevel, this->iterations);
+        logging::println("Start logging at level {} in cycle {}", config.log.loglevel, this->iterations);
         logging::flush();
       }
       logenable = 1;
@@ -1751,8 +1751,8 @@ int OutOfOrderMachine::run() {
       OutOfOrderCore& core = *cores[0];
       foreach (i, core.threadcount)
         core.threads[i]->stop_at_next_eom = 1;
-      if (config.abort_at_end) {
-        config.abort_at_end = 0;
+      if (config.debug.abort_at_end) {
+        config.debug.abort_at_end = 0;
         logging::println("Abort immediately: do not wait for next x86 boundary nor flush pipelines");
         stopped = 1;
         exiting = 1;
@@ -1786,13 +1786,13 @@ int OutOfOrderMachine::run() {
 
     thread->core_to_external_state();
 
-    if (((this->sim_cycle - thread->last_commit_at_cycle) > 1024) | config.dump_state_now) {
+    if (((this->sim_cycle - thread->last_commit_at_cycle) > 1024) | config.debug.dump_state_now) {
       logging::println(logging::TRACE, "Core State at end for thread {}:", thread->threadid);
       logging::println(logging::TRACE, "{}", thread->ctx);
     }
   }
 
-  config.dump_state_now = 0;
+  config.debug.dump_state_now = 0;
 
   dump_state();
 
@@ -1854,10 +1854,10 @@ void OutOfOrderMachine::dump_state() {
     if (!cores[i])
       continue;
     OutOfOrderCore& core = *cores[i];
-    if unlikely (config.event_log_enabled)
+    if unlikely (config.log.event_log_enabled)
       core.eventlog.print();
     else
-      logging::println(logging::INFO, "config.event_log_enabled is not enabled: {}", config.event_log_enabled);
+      logging::println(logging::INFO, "config.log.event_log_enabled is not enabled: {}", config.log.event_log_enabled);
 
     core.dump_smt_state();
     core.print_smt_state();

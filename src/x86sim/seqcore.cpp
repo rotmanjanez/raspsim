@@ -495,7 +495,7 @@ struct SequentialCoreEventLog {
       assert(machine);
       Options& config = machine->config;
       tail = start;
-      if likely ((config.loglevel >= 6) || config.flush_event_log_every_cycle)
+      if likely ((config.log.loglevel >= 6) || config.log.flush_event_log_every_cycle)
         flush();
     }
     SequentialCoreEvent* event = tail;
@@ -571,7 +571,7 @@ void SequentialCoreEventLog::print(bool only_to_tail) {
   size_t bufsize = end - start;
   size_t limit = (only_to_tail) ? (tail - start) : bufsize;
 
-  if (!config.flush_event_log_every_cycle)
+  if (!config.log.flush_event_log_every_cycle)
     logging::println(logging::INFO, "#-------- Start of event log --------");
 
   W64 cycle = std::numeric_limits<W64>::max();
@@ -601,7 +601,7 @@ void SequentialCoreEventLog::print(bool only_to_tail) {
     p++;
   }
 
-  if (!config.flush_event_log_every_cycle)
+  if (!config.log.flush_event_log_every_cycle)
     logging::println(logging::INFO, "#-------- End of event log --------");
 }
 
@@ -771,7 +771,7 @@ struct SequentialCore {
       // The real hardware would detect unaligned uops in the fetch stage
       // and split them up on the fly.
       //
-      if unlikely (config.event_log_enabled) {
+      if unlikely (config.log.event_log_enabled) {
         SequentialCoreEvent* event = eventlog.add(EVENT_LOAD_STORE_UNALIGNED, ctx.vcpuid, uop, arf[REG_rip],
                                                   current_uop_in_macro_op, current_uuid, machine.total_user_insns_committed);
         event->loadstore.virtaddr = origaddr;
@@ -792,7 +792,7 @@ struct SequentialCore {
       origaddr = addr;
     }
 
-    if unlikely (config.event_log_enabled) {
+    if unlikely (config.log.event_log_enabled) {
       SequentialCoreEvent* event = eventlog.add((STORE) ? EVENT_STORE : EVENT_LOAD, ctx.vcpuid, uop, arf[REG_rip],
                                                 current_uop_in_macro_op, current_uuid, machine.total_user_insns_committed);
       event->loadstore.sfr = state;
@@ -847,7 +847,7 @@ struct SequentialCore {
     state.bytemask = bytemask;
     state.datavalid = !annul;
 
-    if unlikely (config.event_log_enabled) {
+    if unlikely (config.log.event_log_enabled) {
       SequentialCoreEvent* event = eventlog.add(EVENT_STORE, ctx.vcpuid, uop, rip, current_uop_in_macro_op,
                                                 current_uuid, machine.total_user_insns_committed);
       event->loadstore.sfr = state;
@@ -928,7 +928,7 @@ struct SequentialCore {
         state.invalid = 0;
         state.datavalid = 1;
 
-        if unlikely (config.event_log_enabled) {
+        if unlikely (config.log.event_log_enabled) {
           SequentialCoreEvent* event = eventlog.add(EVENT_LOAD_ANNUL, ctx.vcpuid, uop, rip, current_uop_in_macro_op,
                                                     current_uuid, machine.total_user_insns_committed);
           event->loadstore.sfr = state;
@@ -952,7 +952,7 @@ struct SequentialCore {
     state.datavalid = 1;
     state.bytemask = 0xff;
 
-    if unlikely (config.event_log_enabled) {
+    if unlikely (config.log.event_log_enabled) {
       SequentialCoreEvent* event = eventlog.add(EVENT_LOAD, ctx.vcpuid, uop, rip, current_uop_in_macro_op, current_uuid,
                                                 machine.total_user_insns_committed);
       event->loadstore.sfr = state;
@@ -1075,7 +1075,7 @@ struct SequentialCore {
       assert(current_basic_block);
       synth_uops_for_bb(*current_basic_block);
 
-      if unlikely (config.event_log_enabled) {
+      if unlikely (config.log.event_log_enabled) {
         TransOp dummyuop;
         setzero(dummyuop);
         SequentialCoreEvent* event =
@@ -1108,7 +1108,7 @@ struct SequentialCore {
     logging::println(logging::DEBUG, "[vcpu {}] Sequentially executing basic block {} ({} uops), insn limit {}",
                      ctx.vcpuid, W64(bb->rip), bb->count, insnlimit);
 
-    if unlikely (config.event_log_enabled) {
+    if unlikely (config.log.event_log_enabled) {
       TransOp dummyuop;
       setzero(dummyuop);
       SequentialCoreEvent* event =
@@ -1148,8 +1148,8 @@ struct SequentialCore {
         return SEQEXEC_EARLY_EXIT;
       }
 
-      if unlikely (arf[REG_rip] == config.start_log_at_rip) {
-        config.start_log_at_iteration = 0;
+      if unlikely (arf[REG_rip] == config.log.start_log_at_rip) {
+        config.log.start_log_at_iteration = 0;
         logenable = 1;
       }
 
@@ -1238,7 +1238,7 @@ struct SequentialCore {
 
       force_fpu_not_avail_fault = (uop.is_sse & ctx.no_sse) | (uop.is_x87 & ctx.no_x87);
       if unlikely (force_fpu_not_avail_fault) {
-        if unlikely (config.event_log_enabled) {
+        if unlikely (config.log.event_log_enabled) {
           SequentialCoreEvent* event = eventlog.add(EVENT_ISSUE, ctx.vcpuid, uop, rip, current_uop_in_macro_op,
                                                     current_uuid, machine.total_user_insns_committed);
           IssueState state;
@@ -1273,7 +1273,7 @@ struct SequentialCore {
           arf[REG_flags] = saved_flags;
           return SEQEXEC_EXCEPTION;
         } else if (status == ISSUE_REFETCH) {
-          if unlikely (config.event_log_enabled) {
+          if unlikely (config.log.event_log_enabled) {
             SequentialCoreEvent* event =
                 eventlog.add(EVENT_ALIGNMENT_FIXUP, ctx.vcpuid, uop, rip, current_uop_in_macro_op, current_uuid,
                              machine.total_user_insns_committed);
@@ -1289,7 +1289,7 @@ struct SequentialCore {
         assert(synthop);
         state = issue_state_from(synthop(inputs));
 
-        if unlikely (config.event_log_enabled) {
+        if unlikely (config.log.event_log_enabled) {
           SequentialCoreEvent* event = eventlog.add(EVENT_BRANCH, ctx.vcpuid, uop, rip, current_uop_in_macro_op,
                                                     current_uuid, machine.total_user_insns_committed);
           event->issue.state = state;
@@ -1304,7 +1304,7 @@ struct SequentialCore {
         if unlikely (state.reg.rdflags & FLAG_INV)
           ctx.exception = LO32(state.reg.rddata);
 
-        if unlikely (config.event_log_enabled) {
+        if unlikely (config.log.event_log_enabled) {
           SequentialCoreEvent* event = eventlog.add(EVENT_ISSUE, ctx.vcpuid, uop, rip, current_uop_in_macro_op,
                                                     current_uuid, machine.total_user_insns_committed);
           event->issue.state = state;
@@ -1313,7 +1313,7 @@ struct SequentialCore {
         if unlikely (ctx.exception) {
           if (isclass(uop.opcode, OPCLASS_CHECK) & (ctx.exception == EXCEPTION_SkipBlock)) {
             W64 chk_recovery_rip = arf[REG_rip] + bytes_in_current_insn;
-            if unlikely (config.event_log_enabled) {
+            if unlikely (config.log.event_log_enabled) {
               SequentialCoreEvent* event = eventlog.add(EVENT_SKIPBLOCK, ctx.vcpuid, uop, rip, current_uop_in_macro_op,
                                                         current_uuid, machine.total_user_insns_committed);
               event->skipblock.bytes_in_current_insn = bytes_in_current_insn;
@@ -1365,7 +1365,7 @@ struct SequentialCore {
       }
 
       if unlikely (pteupdate) {
-        if unlikely (config.event_log_enabled) {
+        if unlikely (config.log.event_log_enabled) {
           SequentialCoreEvent* event = eventlog.add(EVENT_PTE_UPDATE, ctx.vcpuid, uop, rip, current_uop_in_macro_op,
                                                     current_uuid, machine.total_user_insns_committed);
           event->pteupdate.virtaddr = origvirt;
@@ -1386,9 +1386,9 @@ struct SequentialCore {
 
       barrier = isclass(uop.opcode, OPCLASS_BARRIER);
 
-      if unlikely ((arf[REG_rip] == config.log_backwards_from_trigger_rip) && (config.event_log_enabled)) {
+      if unlikely ((arf[REG_rip] == config.log.log_backwards_from_trigger_rip) && (config.log.event_log_enabled)) {
         logging::println("Hit trigger rip {}; printing event ring buffer:",
-                         (void*)(Waddr)config.log_backwards_from_trigger_rip);
+                         (void*)(Waddr)config.log.log_backwards_from_trigger_rip);
         logging::flush();
         eventlog.print();
         logging::println("End of triggered event dump");
@@ -1401,7 +1401,7 @@ struct SequentialCore {
       }
 
       if unlikely (barrier) {
-        if unlikely (config.event_log_enabled) {
+        if unlikely (config.log.event_log_enabled) {
           int assistid = arf[REG_rip];
           assist_func_t assist = (assist_func_t)(Waddr)assistid_to_func[assistid];
           TransOp dummyuop;
@@ -1511,8 +1511,8 @@ int SequentialMachine::run() {
                      total_user_insns_committed);
     logging::flush();
 
-    if unlikely (config.event_log_enabled && (!eventlog.start)) {
-      eventlog.init(config.event_log_ring_buffer_size);
+    if unlikely (config.log.event_log_enabled && (!eventlog.start)) {
+      eventlog.init(config.log.event_log_ring_buffer_size);
     }
 
     foreach (i, contextcount) {
@@ -1527,10 +1527,10 @@ int SequentialMachine::run() {
 
     bool exiting = false;
 
-    logging::println(logging::INFO, "Current logenable = {}, start_log_at_iteration = {}, loglevel {}", logenable, config.start_log_at_iteration, config.loglevel);
+    logging::println(logging::INFO, "Current logenable = {}, start_log_at_iteration = {}, loglevel {}", logenable, config.log.start_log_at_iteration, config.log.loglevel);
 
     for (;;) {
-      if unlikely (iterations >= config.start_log_at_iteration)
+      if unlikely (iterations >= config.log.start_log_at_iteration)
         logenable = 1;
 
       int running_thread_count = 0;
@@ -1543,8 +1543,8 @@ int SequentialMachine::run() {
       exiting |= iterations >= config.stop_at_iteration ||
                  total_user_insns_committed >= config.stop_at_user_insns;
 
-      if unlikely (config.event_log_enabled) {
-        if unlikely (config.flush_event_log_every_cycle)
+      if unlikely (config.log.event_log_enabled) {
+        if unlikely (config.log.flush_event_log_every_cycle)
           eventlog.flush(true);
       }
 

@@ -33,6 +33,14 @@ namespace {
   }
 }
 
+[[nodiscard]] Context& context_from_register_file(RegisterFile& registers) noexcept {
+  return static_cast<Context&>(registers);
+}
+
+[[nodiscard]] const Context& context_from_register_file(const RegisterFile& registers) noexcept {
+  return static_cast<const Context&>(registers);
+}
+
 void advance_default_syscall_rip_if_unchanged(Context& context, SyscallKind kind, W64 old_rip) noexcept {
   if (context[Register::rip] != old_rip)
     return;
@@ -193,8 +201,8 @@ int Context::write_segreg(unsigned int, W16) {
 void Context::update_shadow_segment_descriptors() {
   W64 limit = use64 ? 0xffffffffffffffffULL : 0xffffffffULL;
 
-  for (SegmentDescriptorCache* seg_cache : {&seg[SEGID_CS], &seg[SEGID_SS], &seg[SEGID_DS], &seg[SEGID_ES],
-                                            &seg[SEGID_FS], &seg[SEGID_GS]}) {
+  for (SegmentDescriptorCache* seg_cache : {&seg[segment_register_index(SegmentRegister::cs)], &seg[segment_register_index(SegmentRegister::ss)], &seg[segment_register_index(SegmentRegister::ds)], &seg[segment_register_index(SegmentRegister::es)],
+                                            &seg[segment_register_index(SegmentRegister::fs)], &seg[segment_register_index(SegmentRegister::gs)]}) {
     seg_cache->present = 1;
     seg_cache->base = 0;
     seg_cache->limit = limit;
@@ -257,23 +265,28 @@ void Machine::unmap(address_t start, std::uint64_t size) noexcept {
   address_space_->unmap(start, size);
 }
 
-std::expected<std::span<const std::byte>, MemoryError> Machine::read_memory(address_t start,
-                                                                           std::size_t num_bytes) const noexcept {
-  if (num_bytes == 0)
-    return std::span<const std::byte>{};
+std::expected<void, MemoryError> Machine::read_memory_into(address_t start, std::span<std::byte> out) const noexcept {
+  if (out.empty())
+    return std::unexpected(MemoryError::zero_size);
 
-  const auto page_remaining = kPageSize - (start & (kPageSize - 1));
-  if (num_bytes > page_remaining)
-    return std::unexpected(MemoryError::unmapped_address);
+  std::uint64_t processed = 0;
+  while (processed < out.size()) {
+    address_t addr = start + processed;
+    const auto* src = static_cast<const std::byte*>(address_space_->page_virt_to_mapped(addr));
+    if (!src)
+      return std::unexpected(MemoryError::unmapped_address);
 
-  auto* src = static_cast<const std::byte*>(address_space_->page_virt_to_mapped(start));
-  if (!src)
-    return std::unexpected(MemoryError::unmapped_address);
-
-  return std::span<const std::byte>(src, num_bytes);
+    auto chunk = std::min<std::uint64_t>(out.size() - processed, kPageSize - (addr & (kPageSize - 1)));
+    std::memcpy(out.data() + processed, src, chunk);
+    processed += chunk;
+  }
+  return {};
 }
 
 std::expected<void, MemoryError> Machine::write_memory(address_t start, std::span<const std::byte> bytes) noexcept {
+  if (bytes.empty())
+    return std::unexpected(MemoryError::zero_size);
+
   std::uint64_t processed = 0;
   while (processed < bytes.size()) {
     address_t addr = start + processed;
@@ -333,6 +346,14 @@ const RegisterFile& Machine::register_file(std::size_t core_index) const noexcep
   return machine_->register_file(core_index);
 }
 
+address_t Machine::segment_base(const RegisterFile& registers, SegmentRegister segment) const noexcept {
+  return context_from_register_file(registers).seg[segment_register_index(segment)].base;
+}
+
+void Machine::set_segment_base(RegisterFile& registers, SegmentRegister segment, address_t base) noexcept {
+  context_from_register_file(registers).seg[segment_register_index(segment)].base = base;
+}
+
 AddressSpace& Machine::address_space() noexcept {
   return *address_space_;
 }
@@ -341,12 +362,12 @@ const AddressSpace& Machine::address_space() const noexcept {
   return *address_space_;
 }
 
-SyscallResult Machine::dispatch_syscall(Context& context, SyscallKind kind) noexcept {
-  return callbacks_.syscall(*this, context, kind);
+SyscallResult Machine::dispatch_syscall(RegisterFile& registers, SyscallKind kind) {
+  return callbacks_.syscall(*this, registers, kind);
 }
 
-CpuidResult Machine::dispatch_cpuid(Context& context, CpuidRequest request) noexcept {
-  return callbacks_.cpuid(*this, context, request);
+CpuidResult Machine::dispatch_cpuid(RegisterFile& registers, CpuidRequest request) noexcept {
+  return callbacks_.cpuid(*this, registers, request);
 }
 
 void Machine::set_pending_stop(RunResult result) {

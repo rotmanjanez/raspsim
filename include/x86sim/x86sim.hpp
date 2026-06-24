@@ -18,12 +18,18 @@
 namespace x86sim {
 
 class AddressSpace;
-struct Context;
 struct MachineImpl;
 
 using address_t = std::uint64_t;
 enum class Protection : std::uint8_t { none = 0, read = 1, write = 2, execute = 4 };
 enum class CoreModel { out_of_order, sequential };
+enum class SegmentRegister : std::uint8_t { es = 0, cs = 1, ss = 2, ds = 3, fs = 4, gs = 5 };
+
+inline constexpr std::size_t segment_register_count = 6;
+
+[[nodiscard]] constexpr std::size_t segment_register_index(SegmentRegister reg) noexcept {
+  return static_cast<std::size_t>(reg);
+}
 
 enum class SyscallKind { int80, syscall64, sysenter };
 enum class StopReason { guest_exit, instruction_limit, x86_exception, host_request, unsupported_syscall };
@@ -65,19 +71,13 @@ class Machine;
 class HostCallbacks {
 public:
   virtual ~HostCallbacks() = default;
-  virtual SyscallResult syscall(Machine&, Context&, SyscallKind) noexcept = 0;
-  virtual CpuidResult cpuid(Machine&, Context&, CpuidRequest) noexcept = 0;
+  virtual SyscallResult syscall(Machine&, RegisterFile&, SyscallKind) = 0;
+  virtual CpuidResult cpuid(Machine&, RegisterFile&, CpuidRequest) noexcept = 0;
 };
 
-struct Options {
+struct LogOptions {
   static constexpr address_t invalid_rip = std::numeric_limits<address_t>::max();
 
-  CoreModel core = CoreModel::out_of_order;
-  std::uint64_t core_count = 1;
-  bool sse = true;
-  bool x87 = true;
-
-  bool quiet = false;
   std::filesystem::path log_filename = "ptlsim.log";
   std::uint64_t loglevel = 0;
   std::uint64_t start_log_at_iteration = std::numeric_limits<std::uint64_t>::max();
@@ -94,6 +94,11 @@ struct Options {
   std::uint64_t event_log_ring_buffer_size = 32768;
   bool flush_event_log_every_cycle = false;
   address_t log_backwards_from_trigger_rip = invalid_rip;
+};
+
+struct DebugOptions {
+  static constexpr address_t invalid_rip = std::numeric_limits<address_t>::max();
+
   bool dump_state_now = false;
   bool abort_at_end = false;
 
@@ -102,16 +107,29 @@ struct Options {
   bool trigger_mode = false;
   std::uint64_t pause_at_startup = 0;
 
-  std::uint64_t stop_at_user_insns = std::numeric_limits<std::uint64_t>::max();
-  std::uint64_t stop_at_iteration = std::numeric_limits<std::uint64_t>::max();
-  address_t stop_at_rip = invalid_rip;
-
   bool perfect_cache = false;
   bool static_branchpred = false;
 
   std::string bbcache_dump_filename;
   std::uint64_t sequential_mode_insns = 0;
   bool exit_after_fullsim = false;
+};
+
+struct Options {
+  static constexpr address_t invalid_rip = LogOptions::invalid_rip;
+
+  CoreModel core = CoreModel::out_of_order;
+  std::uint64_t core_count = 1;
+  bool sse = true;
+  bool x87 = true;
+  bool quiet = false;
+
+  std::uint64_t stop_at_user_insns = std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t stop_at_iteration = std::numeric_limits<std::uint64_t>::max();
+  address_t stop_at_rip = invalid_rip;
+
+  LogOptions log;
+  DebugOptions debug;
 };
 
 struct RunOptions {
@@ -149,8 +167,7 @@ public:
 
   [[nodiscard]] std::expected<void, MemoryError> map(address_t start, std::uint64_t size, Protection) noexcept;
   void unmap(address_t start, std::uint64_t size) noexcept;
-  [[nodiscard]] std::expected<std::span<const std::byte>, MemoryError> read_memory(address_t start,
-                                                                                  std::size_t num_bytes) const noexcept;
+  [[nodiscard]] std::expected<void, MemoryError> read_memory_into(address_t start, std::span<std::byte> out) const noexcept;
   [[nodiscard]] std::expected<void, MemoryError> write_memory(address_t start, std::span<const std::byte>) noexcept;
 
   [[nodiscard]] RunResult run(RunOptions = {});
@@ -159,10 +176,12 @@ public:
   [[nodiscard]] Stats stats() const noexcept;
   [[nodiscard]] RegisterFile& register_file(std::size_t core_index = 0) noexcept;
   [[nodiscard]] const RegisterFile& register_file(std::size_t core_index = 0) const noexcept;
+  [[nodiscard]] address_t segment_base(const RegisterFile&, SegmentRegister) const noexcept;
+  void set_segment_base(RegisterFile&, SegmentRegister, address_t) noexcept;
   [[nodiscard]] AddressSpace& address_space() noexcept;
   [[nodiscard]] const AddressSpace& address_space() const noexcept;
-  [[nodiscard]] SyscallResult dispatch_syscall(Context&, SyscallKind) noexcept;
-  [[nodiscard]] CpuidResult dispatch_cpuid(Context&, CpuidRequest) noexcept;
+  [[nodiscard]] SyscallResult dispatch_syscall(RegisterFile&, SyscallKind);
+  [[nodiscard]] CpuidResult dispatch_cpuid(RegisterFile&, CpuidRequest) noexcept;
   void set_pending_stop(RunResult);
 
 private:
@@ -212,6 +231,31 @@ struct std::formatter<x86sim::CoreModel> {
       return std::format_to(ctx.out(), "sequential");
     }
     return std::format_to(ctx.out(), "unknown({})", static_cast<int>(model));
+  }
+};
+
+template<>
+struct std::formatter<x86sim::SegmentRegister> {
+  constexpr auto parse(std::format_parse_context& ctx) { return ctx.begin(); }
+
+  template<typename FormatContext>
+  auto format(x86sim::SegmentRegister reg, FormatContext& ctx) const {
+    using enum x86sim::SegmentRegister;
+    switch (reg) {
+    case es:
+      return std::format_to(ctx.out(), "es");
+    case cs:
+      return std::format_to(ctx.out(), "cs");
+    case ss:
+      return std::format_to(ctx.out(), "ss");
+    case ds:
+      return std::format_to(ctx.out(), "ds");
+    case fs:
+      return std::format_to(ctx.out(), "fs");
+    case gs:
+      return std::format_to(ctx.out(), "gs");
+    }
+    return std::format_to(ctx.out(), "unknown({})", static_cast<int>(reg));
   }
 };
 
@@ -324,8 +368,8 @@ struct std::formatter<x86sim::Options> {
     return std::format_to(ctx.out(),
                           "core={}, core_count={}, sse={}, x87={}, perfect_cache={}, static_branchpred={}, "
                           "log_filename={}",
-                          options.core, options.core_count, options.sse, options.x87, options.perfect_cache,
-                          options.static_branchpred, options.log_filename.string());
+                          options.core, options.core_count, options.sse, options.x87, options.debug.perfect_cache,
+                          options.debug.static_branchpred, options.log.log_filename.string());
   }
 };
 
@@ -398,8 +442,8 @@ struct std::formatter<x86sim::Machine> {
                           "x86sim::Machine(core={}, core_count={}, address_space={}, cycles={}, instructions={}, "
                           "sse={}, x87={}, perfect_cache={}, static_branch_prediction={}, core0={})",
                           options.core, options.core_count, static_cast<const void*>(&machine.address_space()), stats.cycles,
-                          stats.instructions, options.sse, options.x87, options.perfect_cache,
-                          options.static_branchpred,
+                          stats.instructions, options.sse, options.x87, options.debug.perfect_cache,
+                          options.debug.static_branchpred,
                           options.core_count == 0 ? x86sim::RegisterFile{} : machine.register_file(0));
   }
 };

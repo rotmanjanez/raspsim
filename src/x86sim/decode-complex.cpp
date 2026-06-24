@@ -508,7 +508,7 @@ bool TraceDecoder::decode_complex() {
     DECODE(gform, ra, w_mode);
     EndOfDecode();
 
-    // Same encoding as order in SEGID_xxx: ES CS SS DS FS GS - - (last two are invalid)
+    // Same encoding as SegmentRegister: ES CS SS DS FS GS - - (last two are invalid)
     if (modrm.reg >= 6)
       MakeInvalid();
 
@@ -529,7 +529,7 @@ bool TraceDecoder::decode_complex() {
     DECODE(eform, ra, w_mode);
     EndOfDecode();
 
-    // Same encoding as order in SEGID_xxx: ES CS SS DS FS GS - - (last two are invalid)
+    // Same encoding as SegmentRegister: ES CS SS DS FS GS - - (last two are invalid)
     if (modrm.reg >= 6)
       MakeInvalid();
 
