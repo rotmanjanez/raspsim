@@ -5,16 +5,24 @@ project(x86sim
   LANGUAGES CXX
 )
 
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+option(X86SIM_BUILD_DEFAULTS "Build the Linux syscall/cpuid support library" ON)
+option(X86SIM_BUILD_RASPSIM  "Build the raspsim command-line simulator"      ON)
+option(X86SIM_BUILD_LINUX    "Build the x86sim-linux command-line simulator" ON)
+option(X86SIM_BUILD_TESTS    "Build the CTest suite (SQLite through x86sim-linux)" ON)
+option(X86SIM_BUILD_PYTHON   "Build the pybind11 Python extension module"   OFF)
 
-cmake_host_system_information(RESULT buildhost QUERY FQDN)
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(GNUInstallDirs)
 include(GitRevision)
 
+# Build-time provenance, stamped into the core library and the simulators.
+cmake_host_system_information(RESULT buildhost QUERY FQDN)
+set(build_info BUILDHOST=${buildhost} GIT_REVISION=${GIT_REVISION})
+
+set(install_targets)
+
+# --- x86sim: portable virtual CPU core (always built) ---------------------
 file(GLOB vcore_sources CONFIGURE_DEPENDS src/x86sim/*.cpp)
-
-set(build_info_definitions BUILDHOST=${buildhost} GIT_REVISION=${GIT_REVISION})
-
 add_library(x86sim)
 add_library(x86sim::x86sim ALIAS x86sim)
 target_sources(x86sim
@@ -28,44 +36,53 @@ target_sources(x86sim
       include/x86sim/registerfile.hpp
       include/x86sim/x86sim.hpp
 )
-target_include_directories(x86sim
-  PRIVATE
-    src/x86sim
-)
-target_compile_definitions(x86sim PRIVATE ${build_info_definitions})
+target_include_directories(x86sim PRIVATE src/x86sim)
+target_compile_definitions(x86sim PRIVATE ${build_info})
+list(APPEND install_targets x86sim)
 
-add_library(x86sim_defaults)
-add_library(x86sim::defaults ALIAS x86sim_defaults)
-target_sources(x86sim_defaults
-  PRIVATE
-    src/x86sim-support/cpuid.cpp
-    src/x86sim-support/syscall-linux.cpp
-  PUBLIC
-    FILE_SET HEADERS
-    BASE_DIRS include
-    FILES
-      include/x86sim-support/cpuid.hpp
-      include/x86sim-support/syscall-linux.hpp
-)
-target_link_libraries(x86sim_defaults PUBLIC x86sim::x86sim)
-target_include_directories(x86sim_defaults PRIVATE src/x86sim)
-set_target_properties(x86sim_defaults PROPERTIES EXPORT_NAME defaults)
+# --- x86sim_defaults: Linux syscall + cpuid support library ---------------
+if(X86SIM_BUILD_DEFAULTS)
+  add_library(x86sim_defaults)
+  add_library(x86sim::defaults ALIAS x86sim_defaults)
+  set_target_properties(x86sim_defaults PROPERTIES EXPORT_NAME defaults)
+  target_sources(x86sim_defaults
+    PRIVATE
+      src/x86sim-support/cpuid.cpp
+      src/x86sim-support/syscall-linux.cpp
+    PUBLIC
+      FILE_SET HEADERS
+      BASE_DIRS include
+      FILES
+        include/x86sim-support/cpuid.hpp
+        include/x86sim-support/syscall-linux.hpp
+  )
+  target_link_libraries(x86sim_defaults PUBLIC x86sim::x86sim)
+  target_include_directories(x86sim_defaults PRIVATE src/x86sim)
+  list(APPEND install_targets x86sim_defaults)
+endif()
 
-add_executable(raspsim
-  src/raspsim/config.cpp
-  src/raspsim/raspsim.cpp
-)
-target_link_libraries(raspsim PRIVATE x86sim::defaults)
-target_include_directories(raspsim PRIVATE src/x86sim)
-target_compile_definitions(raspsim PRIVATE ${build_info_definitions})
+# --- raspsim: command-line simulator --------------------------------------
+if(X86SIM_BUILD_RASPSIM)
+  add_executable(raspsim
+    src/raspsim/config.cpp
+    src/raspsim/raspsim.cpp
+  )
+  target_link_libraries(raspsim PRIVATE x86sim::defaults)
+  target_include_directories(raspsim PRIVATE src/x86sim)
+  list(APPEND install_targets raspsim)
+endif()
 
-add_executable(x86sim-linux
-  src/x86sim-linux/x86sim-linux.cpp
-)
-target_link_libraries(x86sim-linux PRIVATE x86sim::defaults)
-target_compile_definitions(x86sim-linux PRIVATE ${build_info_definitions})
+# --- x86sim-linux: command-line simulator ---------------------------------
+if(X86SIM_BUILD_LINUX)
+  add_executable(x86sim-linux
+    src/x86sim-linux/x86sim-linux.cpp
+  )
+  target_link_libraries(x86sim-linux PRIVATE x86sim::defaults)
+  list(APPEND install_targets x86sim-linux)
+endif()
 
-install(TARGETS x86sim x86sim_defaults raspsim x86sim-linux
+# --- install / export -----------------------------------------------------
+install(TARGETS ${install_targets}
   EXPORT x86simTargets
   FILE_SET HEADERS
 )
@@ -74,7 +91,22 @@ install(EXPORT x86simTargets
   DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/x86sim"
 )
 
-option(X86SIM_BUILD_TESTS "Build the CTest suite (SQLite through x86sim-linux)" ON)
+# --- python bindings ------------------------------------------------------
+# The extension only links the portable core (plus cpuid), never the Linux
+# support library, so it stays buildable off-Linux. Driven by pyproject.toml,
+# which points scikit-build-core at this file and disables the Linux tools.
+if(X86SIM_BUILD_PYTHON)
+  find_package(pybind11 CONFIG REQUIRED)
+  pybind11_add_module(core MODULE
+    pyraspsim/src/binding.cpp
+    src/x86sim-support/cpuid.cpp
+  )
+  target_link_libraries(core PRIVATE x86sim::x86sim)
+  target_include_directories(core PRIVATE include)
+  install(TARGETS core LIBRARY DESTINATION x86sim)
+endif()
+
+# --- tests ----------------------------------------------------------------
 if(X86SIM_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests/sqlite3)

@@ -1,26 +1,42 @@
-#include <elf.h>
 #include <pybind11/pybind11.h>
-#include <raspsim-hwsetup.h>
-#include <setjmp.h>
-#include <sys/mman.h>
+
+#include "x86sim-support/cpuid.hpp"
+#include "x86sim/registerfile.hpp"
+#include "x86sim/x86sim.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cstring>
 #include <format>
 #include <mutex>
-#include <registers.def>
+#include <optional>
+#include <span>
 #include <string>
+#include <string_view>
+#include <tuple>
+#include <utility>
 
 namespace py = pybind11;
 using namespace py::literals;
 
+using x86sim::address_t;
+using x86sim::Register;
+using x86sim::RegisterFile;
+using x86sim::word_t;
+using x86sim::XmmRegister;
+using x86sim::XmmValue;
+
+// Python-facing protection flags. The member names and composites match the old
+// binding so the pure-Python layer (elf.py) is untouched; the underlying values
+// follow x86sim::Protection semantics.
 enum class Prot {
-  READ = PROT_READ,
-  WRITE = PROT_WRITE,
-  EXEC = PROT_EXEC,
-  NONE = PROT_NONE,
-  RW = PROT_READ | PROT_WRITE,
-  RX = PROT_READ | PROT_EXEC,
-  RWX = PROT_READ | PROT_WRITE | PROT_EXEC
+  READ = static_cast<int>(x86sim::Protection::read),
+  WRITE = static_cast<int>(x86sim::Protection::write),
+  EXEC = static_cast<int>(x86sim::Protection::execute),
+  NONE = static_cast<int>(x86sim::Protection::none),
+  RW = READ | WRITE,
+  RX = READ | EXEC,
+  RWX = READ | WRITE | EXEC
 };
 
 bool hasProt(Prot p, Prot q) {
@@ -31,122 +47,70 @@ Prot addProt(Prot p, Prot q) {
   return static_cast<Prot>(static_cast<int>(p) | static_cast<int>(q));
 }
 
+x86sim::Protection toProtection(Prot p) {
+  return static_cast<x86sim::Protection>(static_cast<std::uint8_t>(p));
+}
+
+// ELF segment flags (PF_R=4, PF_W=2, PF_X=1) -> Prot.
 Prot getProtFromELFSegment(int flags) {
-  int prot = 0;
-
-  if (flags & PF_R) {
+  int prot = static_cast<int>(Prot::NONE);
+  if (flags & 0x4)
     prot |= static_cast<int>(Prot::READ);
-  }
-  if (flags & PF_W) {
+  if (flags & 0x2)
     prot |= static_cast<int>(Prot::WRITE);
-  }
-
-  if (flags & PF_X) {
+  if (flags & 0x1)
     prot |= static_cast<int>(Prot::EXEC);
-  }
-
   return static_cast<Prot>(prot);
 }
 
+class PyRaspsim;
+
 class AddrRef {
 public:
-  AddrRef(Raspsim* sim, Waddr virtaddr) : virtaddr(virtaddr), sim(sim) {}
+  AddrRef(PyRaspsim* sim, address_t virtaddr) : virtaddr(virtaddr), sim(sim) {}
   AddrRef() : virtaddr(0), sim(nullptr) {}
 
-  operator Waddr() const { return virtaddr; }
+  operator address_t() const { return virtaddr; }
 
-  AddrRef operator+(Waddr offset) { return AddrRef{sim, virtaddr + offset}; }
-  AddrRef operator-(Waddr offset) { return AddrRef{sim, virtaddr - offset}; }
+  AddrRef operator+(address_t offset) { return AddrRef{sim, virtaddr + offset}; }
+  AddrRef operator-(address_t offset) { return AddrRef{sim, virtaddr - offset}; }
 
-  bool operator==(const AddrRef& other) const { return addr() == other.addr(); }
-  bool operator!=(const AddrRef& other) const { return addr() != other.addr(); }
-  bool operator<(const AddrRef& other) const { return addr() < other.addr(); }
-  bool operator<=(const AddrRef& other) const { return addr() <= other.addr(); }
-  bool operator>(const AddrRef& other) const { return addr() > other.addr(); }
-  bool operator>=(const AddrRef& other) const { return addr() >= other.addr(); }
+  bool operator==(const AddrRef& other) const { return virtaddr == other.virtaddr; }
+  bool operator!=(const AddrRef& other) const { return virtaddr != other.virtaddr; }
+  bool operator<(const AddrRef& other) const { return virtaddr < other.virtaddr; }
+  bool operator<=(const AddrRef& other) const { return virtaddr <= other.virtaddr; }
+  bool operator>(const AddrRef& other) const { return virtaddr > other.virtaddr; }
+  bool operator>=(const AddrRef& other) const { return virtaddr >= other.virtaddr; }
 
-  void write(py::bytes&& bts) {
-    std::string mem{std::move(bts)};
+  void write(py::bytes&& bts);
+  py::bytes read(word_t size = 1);
 
-    W64 ps = Raspsim::getPageSize();
-    W64 nprocessed = 0;
-
-    while (nprocessed != mem.size()) {
-      W64 chunksize = std::min({mem.size() - nprocessed, (W64)ps, ps - (virtaddr % (ps - 1))});
-      void* addr = sim->page_virt_to_mapped(virtaddr + nprocessed);
-      if (!addr) {
-        throw py::value_error("Trying to write to unmapped memory");
-      }
-      memcpy(addr, mem.data() + nprocessed, chunksize);
-      nprocessed += chunksize;
-    }
-  }
-
-  py::bytes read(W64 size = 1) {
-    std::string b = "";
-    size_t ps = Raspsim::getPageSize();
-    W64 nprocessed = 0;
-
-    while (size) {
-      Waddr effvirtaddr = virtaddr + nprocessed;
-      W64 chunksize = std::min({(W64)size, (W64)ps, ps - (effvirtaddr & (ps - 1))});
-      void* addr = sim->page_virt_to_mapped(effvirtaddr);
-      if (!addr) {
-        throw py::value_error(strdup(std::format("Trying to read from unmapped memory at {:x}", effvirtaddr).c_str()));
-      }
-      b += std::string((char*)addr, chunksize);
-      nprocessed += chunksize;
-      size -= chunksize;
-    }
-
-    return {std::move(b)};
-  }
-
-  void* addr() const { return sim->page_virt_to_mapped(virtaddr); }
-
-  Waddr virtaddr;
+  address_t virtaddr;
 
 protected:
-  Raspsim* sim;
+  PyRaspsim* sim;
 };
-
 
 class RaspsimException : public std::exception {
 public:
-  RaspsimException(byte exception, W32 errorcode, Waddr virtaddr)
-      : exception(exception), errorcode(errorcode), virtaddr(virtaddr), msg("") {
-    char* m = Raspsim::formatException(exception, errorcode, virtaddr);
-    msg += m;
-    free(m);
-  }
-  RaspsimException(byte exception, W32 errorcode, Waddr virtaddr, const Context& ctx)
-      : RaspsimException(exception, errorcode, virtaddr) {
-    msg += "\n";
-    msg += Raspsim::formatContext(ctx);
-  }
+  RaspsimException(const x86sim::X86Exception& exc) : vector(exc.vector), msg(std::format("{}", exc)) {}
 
-  RaspsimException(const char* msg) : exception(-1), errorcode(0), virtaddr(0), msg(strdup(msg)) {}
+  RaspsimException(const char* m) : vector(-1), msg(m) {}
+  RaspsimException(std::string m) : vector(-1), msg(std::move(m)) {}
 
-  byte getException() const { return exception; }
-  W32 getErrorCode() const { return errorcode; }
-  Waddr getVirtAddr() const { return virtaddr; }
-
+  int getVector() const { return vector; }
   const char* what() const noexcept override { return msg.c_str(); }
 
-  std::pair<std::string, unsigned> loc{};
-
 private:
-  byte exception;
-  W32 errorcode;
-  Waddr virtaddr;
+  int vector;
   std::string msg;
 };
 
 #define RASPSIM_INHERIT_EXCEPTION(name)                                                                                \
-  class name : public RaspsimException {                                                                               \
+  class name : public RaspsimException {                                                                              \
   public:                                                                                                              \
-    name(const RaspsimException& e) : RaspsimException(e) {}                                                           \
-    name(RaspsimException&& e) : RaspsimException(std::move(e)) {}                                                     \
+    name(const RaspsimException& e) : RaspsimException(e) {}                                                          \
+    name(RaspsimException&& e) : RaspsimException(std::move(e)) {}                                                    \
   }
 
 // X86 exceptions in order of their exception numbers
@@ -171,98 +135,124 @@ RASPSIM_INHERIT_EXCEPTION(RaspsimUnalignedException);
 RASPSIM_INHERIT_EXCEPTION(RaspsimMachineCheckException);
 RASPSIM_INHERIT_EXCEPTION(RaspsimSSEException);
 
-class RegisterFile;
+class RegisterFileRef;
 
-class PyRaspsim : public Raspsim {
+// raspsim is a register/memory-level simulator: an int 0x80 signals the guest is
+// done; any other syscall is unsupported and surfaces as an exception.
+class PyHost : public x86sim::HostCallbacks {
 public:
-  PyRaspsim(const char* logfile) : Raspsim() {
-    if (lock.try_lock()) {
-      setLogfile(logfile);
-    } else {
+  x86sim::SyscallResult syscall(x86sim::Machine&, RegisterFile&, x86sim::SyscallKind kind) override {
+    using x86sim::StopReason;
+    if (kind == x86sim::SyscallKind::int80)
+      return {.reason = StopReason::guest_exit, .continue_execution = false, .message = {}};
+    return {.reason = StopReason::unsupported_syscall, .continue_execution = false,
+            .message = "Syscall not supported"};
+  }
+
+  x86sim::CpuidResult cpuid(x86sim::Machine&, RegisterFile&, x86sim::CpuidRequest request) noexcept override {
+    return x86sim::defaults::default_cpuid(request);
+  }
+};
+
+class PyRaspsim {
+public:
+  PyRaspsim(const char* logfile, bool sse, bool x87, bool perfect_cache, bool static_branchpred) {
+    if (!lock.try_lock())
       throw py::value_error("Only one instance of Raspsim can be used at a time");
-    }
+
+    x86sim::Options options;
+    options.sse = sse;
+    options.x87 = x87;
+    options.debug.perfect_cache = perfect_cache;
+    options.debug.static_branchpred = static_branchpred;
+    options.log.log_filename = logfile;
+
+    machine = std::make_unique<x86sim::Machine>(host, options);
   }
 
   ~PyRaspsim() { lock.unlock(); }
 
-  RegisterFile getRegisters();
+  static constexpr word_t getPageSize() { return x86sim::Machine::kPageSize; }
 
-  AddrRef memmap(Waddr start, Prot prot, Waddr length, py::bytes data);
+  x86sim::Machine& m() { return *machine; }
 
-  std::size_t cycles() { return Raspsim::cycles(); }
-  std::size_t instructions() { return Raspsim::instructions(); }
+  RegisterFileRef getRegisters();
 
-  std::string str() {
-    const char* c = Raspsim::formatContext(Raspsim::getContext());
-    std::string s(c);
-    free((void*)c);
-    return s;
-  }
+  AddrRef memmap(address_t start, Prot prot, word_t length, py::bytes data);
 
-  void run(unsigned long long ninstr = (unsigned long long)-1);
+  std::size_t cycles() { return machine->stats().cycles; }
+  std::size_t instructions() { return machine->stats().instructions; }
 
-  static jmp_buf simexit;
-  static RaspsimException X86Exception;
+  std::string str() { return std::format("{}", machine->register_file(0)); }
+
+  void run(unsigned long long ninstr);
+
+  PyHost host;
+  std::unique_ptr<x86sim::Machine> machine;
   static std::mutex lock;
 };
 
 std::mutex PyRaspsim::lock;
 
-AddrRef PyRaspsim::memmap(Waddr start, Prot prot, W64 length, py::bytes data) {
+void AddrRef::write(py::bytes&& bts) {
+  std::string mem{std::move(bts)};
+  auto bytes = std::as_bytes(std::span(mem.data(), mem.size()));
+  if (auto r = sim->m().write_memory(virtaddr, bytes); !r)
+    throw py::value_error(std::format("Trying to write to unmapped memory at {:x}: {}", virtaddr, r.error()));
+}
+
+py::bytes AddrRef::read(word_t size) {
+  std::string out(size, '\0');
+  auto bytes = std::as_writable_bytes(std::span(out.data(), out.size()));
+  if (auto r = sim->m().read_memory_into(virtaddr, bytes); !r)
+    throw py::value_error(std::format("Trying to read from unmapped memory at {:x}: {}", virtaddr, r.error()));
+  return {std::move(out)};
+}
+
+AddrRef PyRaspsim::memmap(address_t start, Prot prot, word_t length, py::bytes data) {
   std::string bytes = std::move(data);
-  byte* raw = nullptr;
   if (bytes.size() > 0) {
-    raw = (byte*)bytes.data();
-    if (length > 0 && bytes.size() > length) {
+    if (length > 0 && bytes.size() > length)
       throw py::value_error("Data size must be less than or equal to length");
-    }
-    length = std::max((std::size_t)length, bytes.size());
+    length = std::max(static_cast<word_t>(length), static_cast<word_t>(bytes.size()));
   }
 
-  if (length == 0) {
+  if (length == 0)
     throw py::value_error("Cannot map zero length data");
-  }
 
-  W64 offset = start % getPageSize();
+  word_t offset = start % getPageSize();
+  if (auto r = machine->map(start - offset, length + offset, toProtection(prot)); !r)
+    throw py::value_error(std::format("Cannot map memory at {:x}: {}", start, r.error()));
 
-  map(start, length + offset, static_cast<int>(prot));
-
-  if (raw) {
-    const W64 pg = getPageSize();
-    W64 nprocessed = 0;
-
-    while (nprocessed < bytes.size()) {
-      Waddr virtaddr = start + nprocessed;
-      W64 offset = virtaddr & (pg - 1);
-      W64 chunksize = std::min(bytes.size() - nprocessed, pg - offset);
-
-      void* dst = page_virt_to_mapped(virtaddr);
-
-      memcpy(dst, raw + nprocessed, chunksize);
-      nprocessed += chunksize;
-    }
+  if (!bytes.empty()) {
+    auto raw = std::as_bytes(std::span(bytes.data(), bytes.size()));
+    if (auto r = machine->write_memory(start, raw); !r)
+      throw py::value_error(std::format("Cannot write mapped memory at {:x}: {}", start, r.error()));
   }
   return AddrRef(this, start);
 }
 
 #define THROW(i, cls)                                                                                                  \
   case i:                                                                                                              \
-    throw cls(std::move(X86Exception));                                                                                \
-    break;
+    throw cls(std::move(exc));
 
 void PyRaspsim::run(unsigned long long ninstr) {
-  setTimeout(ninstr);
+  x86sim::RunOptions run_options;
+  if (ninstr != static_cast<unsigned long long>(-1))
+    run_options.instruction_limit = ninstr;
 
-  if (!machine) {
-    throw py::value_error(std::string("Cannot find core named '") + getCoreName() + "'");
-  }
+  x86sim::RunResult result = machine->run(run_options);
 
-  if (vcore::ensureMachineInitialized(*machine, getCoreName())) {
-    throw std::runtime_error(std::string("Cannot initialize core model for '") + getCoreName() + "'");
-  }
-
-  if (setjmp(simexit)) {
-    switch (X86Exception.getException()) {
+  using x86sim::StopReason;
+  switch (result.reason) {
+  case StopReason::guest_exit:
+    return;
+  case StopReason::instruction_limit:
+    throw py::stop_iteration("Reached instruction limit");
+  case StopReason::x86_exception: {
+    RaspsimException exc = result.x86_exception ? RaspsimException(*result.x86_exception)
+                                                : RaspsimException("Unknown x86 exception");
+    switch (result.x86_exception ? static_cast<int>(result.x86_exception->vector) : -1) {
       THROW(0, RaspsimDivideException)
       THROW(1, RaspsimDebugException)
       THROW(2, RaspsimNMIException)
@@ -284,38 +274,33 @@ void PyRaspsim::run(unsigned long long ninstr) {
       THROW(18, RaspsimMachineCheckException)
       THROW(19, RaspsimSSEException)
     default:
-      throw X86Exception;
+      throw exc;
     }
-  } else {
-    vcore::simulateInitializedMachine(*machine);
-    if (instructions() >= ninstr) {
-      throw py::stop_iteration("Reached instruction limit");
-    }
+  }
+  case StopReason::unsupported_syscall:
+  case StopReason::host_request:
+    throw RaspsimException(result.message.empty() ? "Simulation stopped" : result.message);
   }
 }
 
-jmp_buf PyRaspsim::simexit;
-RaspsimException PyRaspsim::X86Exception = {0, 0, 0};
-
-#define XMM(number)                                                                                                    \
-  void set_xmml##number(W64 value) {                                                                                   \
-    sim->setRegisterValue(REG_xmml##number, value);                                                                    \
-  }                                                                                                                    \
-  void set_xmmh##number(W64 value) {                                                                                   \
-    sim->setRegisterValue(REG_xmmh##number, value);                                                                    \
-  }                                                                                                                    \
-  W64 get_xmml##number() {                                                                                             \
-    return sim->getRegisterValue(REG_xmml##number);                                                                    \
-  }                                                                                                                    \
-  W64 get_xmmh##number() {                                                                                             \
-    return sim->getRegisterValue(REG_xmmh##number);                                                                    \
+// Map a register name to its enum, mirroring src/raspsim/raspsim.cpp.
+std::optional<Register> registerFromName(std::string_view name) {
+  using enum Register;
+  static constexpr std::pair<std::string_view, Register> names[] = {
+      {"rax", rax}, {"rcx", rcx}, {"rdx", rdx}, {"rbx", rbx}, {"rsp", rsp}, {"rbp", rbp}, {"rsi", rsi}, {"rdi", rdi},
+      {"r8", r8},   {"r9", r9},   {"r10", r10}, {"r11", r11}, {"r12", r12}, {"r13", r13}, {"r14", r14}, {"r15", r15},
+      {"rip", rip}, {"flags", flags},
+  };
+  for (auto [reg_name, reg] : names) {
+    if (name == reg_name)
+      return reg;
   }
+  return std::nullopt;
+}
 
 class XMMRegister {
 public:
-  XMMRegister(PyRaspsim* sim, int reg) : sim(sim), reg(reg) {
-    assert(!(reg & 1) && "XMM Register must always be indexed via the lower 64 Bits");
-  }
+  XMMRegister(PyRaspsim* sim, XmmRegister reg) : sim(sim), reg(reg) {}
 
   template<typename T, typename... Ts>
   std::tuple<T, Ts...> getPacked() {
@@ -328,12 +313,9 @@ public:
                   "bits");
 
     std::tuple<T, Ts...> result;
-    std::array<W64, 2> value;
-
-    value[0] = sim->getRegisterValue(reg);
-    value[1] = sim->getRegisterValue(reg + 1);
-
-    memccpy(static_cast<void*>(&std::get<0>(result)), value.data(), NItems, sizeof(T));
+    XmmValue value = sim->m().register_file(0)[reg];
+    std::array<word_t, 2> raw = {value.lo, value.hi};
+    std::memcpy(static_cast<void*>(&std::get<0>(result)), raw.data(), NItems * sizeof(T));
     return result;
   }
 
@@ -352,86 +334,81 @@ public:
                   "128 bits or scalar types with a size less than or equal to 64 "
                   "bits");
 
-    std::array<W64, 2> result = {0, 0};
-    memccpy(result.data(), static_cast<void*>(&std::get<0>(value)), NItems, sizeof(T));
-
-    sim->setRegisterValue(reg, result[0]);
-    sim->setRegisterValue(reg + 1, result[1]);
+    std::array<word_t, 2> raw = {0, 0};
+    std::memcpy(raw.data(), static_cast<void*>(&std::get<0>(value)), NItems * sizeof(T));
+    sim->m().register_file(0)[reg] = XmmValue{raw[0], raw[1]};
   }
 
   template<typename T>
   void setSingle(T value) {
-    setPacked<T>({value});
+    setPacked<T>(std::tuple<T>{value});
   }
 
 private:
   PyRaspsim* sim;
-  int reg;
+  XmmRegister reg;
 };
 
 class MemImg {
 public:
   MemImg(PyRaspsim& sim) : sim(&sim) {}
+
   py::bytes getitem(const py::slice& s) const {
     auto startstop = validateSlice(s);
-
     return AddrRef(sim, startstop.first).read(startstop.second - startstop.first);
   }
 
   void setitem(const py::slice& s, py::bytes data) {
     auto startstop = validateSlice(s);
     std::string raw{std::move(data)};
-
-    if (raw.size() != startstop.second - startstop.first) {
+    if (raw.size() != startstop.second - startstop.first)
       throw py::value_error("Data size must match slice size");
-    }
-
-    AddrRef(sim, startstop.first).write(std::move(data));
+    AddrRef(sim, startstop.first).write(py::bytes(raw));
   }
 
 private:
-  std::pair<Waddr, W64> validateSlice(const py::slice& s) const {
-    if (!py::isinstance<py::none>(s.attr("step"))) {
+  std::pair<address_t, word_t> validateSlice(const py::slice& s) const {
+    if (!py::isinstance<py::none>(s.attr("step")))
       throw py::value_error("Step is not supported");
-    }
-
-    return {s.attr("start").cast<Waddr>(), s.attr("stop").cast<W64>()};
+    return {s.attr("start").cast<address_t>(), s.attr("stop").cast<word_t>()};
   }
 
   PyRaspsim* sim;
 };
 
-class RegisterFile {
+class RegisterFileRef {
   friend class XMMRegister;
 
 public:
-  RegisterFile() = delete;
+  RegisterFileRef() = delete;
+  RegisterFileRef(PyRaspsim* sim) : sim(sim) {}
 
-  RegisterFile(PyRaspsim* sim) : sim(sim) {}
+  word_t getRegister(std::string&& regname) {
+    auto reg = registerFromName(regname);
+    if (!reg)
+      throw py::value_error(std::string("Invalid register name '") + regname + "'");
+    return sim->m().register_file(0)[*reg];
+  }
 
-  RegisterFile(const RegisterFile&) = default;
-  RegisterFile(RegisterFile&&) = default;
-  RegisterFile& operator=(const RegisterFile&) = delete;
-  RegisterFile& operator=(RegisterFile&&) = delete;
-
-  W64 getRegister(std::string&& regname) { return sim->getRegisterValue(getRegisterIdx(std::move(regname))); }
-
-  void setRegister(std::string&& regname, W64 value) {
-    sim->setRegisterValue(getRegisterIdx(std::move(regname)), value);
+  void setRegister(std::string&& regname, word_t value) {
+    auto reg = registerFromName(regname);
+    if (!reg)
+      throw py::value_error(std::string("Invalid register name '") + regname + "'");
+    sim->m().register_file(0)[*reg] = value;
   }
 
   template<typename T, int Bits, int Offset = 0>
-  inline T getGPRegImpl(int reg) {
+  inline T getGPRegImpl(Register reg) {
     static_assert(Bits <= 64, "Register size must be less than or equal to 64 bits");
     static_assert(Offset % 8 == 0, "Offset must be a multiple of 8");
     static_assert(Bits % 8 == 0, "Bits must be a multiple of 8");
 
-    W64 mask = Bits == 64 ? -1 : (((W64)1 << Bits) - 1);
-    return (sim->getRegisterValue(reg) >> Offset) & mask;
+    word_t mask = Bits == 64 ? ~word_t{0} : ((word_t{1} << Bits) - 1);
+    return (sim->m().register_file(0)[reg] >> Offset) & mask;
   }
 
   template<typename T, unsigned Bits, unsigned Offset = 0, bool ZeroHigh = false>
-  inline void setGPRegImpl(int reg, T value) {
+  inline void setGPRegImpl(Register reg, T value) {
     static_assert(Bits <= 64, "Register size must be less than or equal to 64 bits");
     static_assert(Offset + Bits <= 64, "Offset + Bits must be less than or equal to 64");
     static_assert(Offset % 8 == 0, "Offset must be a multiple of 8");
@@ -440,70 +417,58 @@ public:
                   "ZeroHigh can only be used with 32-bit registers at offset 0");
     static_assert(!(Offset > 0 && Bits != 8), "Offset can only be used with 8-bit registers");
 
-    W64 current = sim->getRegisterValue(reg);
+    word_t current = sim->m().register_file(0)[reg];
     int rshift = ZeroHigh ? 0 : 64 - Bits;
 
-    // mask containts 1s in the bits that are not part of the register that
+    // mask contains 1s in the bits that are not part of the register that
     // should be modified
-    W64 mask = (((W64)-1) >> rshift) << Offset;
-
+    word_t mask = ((~word_t{0}) >> rshift) << Offset;
     mask = ~mask;
     current &= mask;
 
-    mask = Bits == 64 ? -1 : (((W64)1 << Bits) - 1);
-    current |= (value & mask) << Offset;
+    mask = Bits == 64 ? ~word_t{0} : ((word_t{1} << Bits) - 1);
+    current |= (static_cast<word_t>(value) & mask) << Offset;
 
-    sim->setRegisterValue(reg, current);
+    sim->m().register_file(0)[reg] = current;
   }
 
-private:
-  unsigned getRegisterIdx(std::string&& regname) {
-    int idx = sim->getRegisterIndex(regname.c_str());
-    if (idx < 0) {
-      throw py::value_error(std::string("Invalid register name '") + regname + "'");
-    }
-    return idx;
-  }
-
-public:
   PyRaspsim* sim;
 };
 
-RegisterFile PyRaspsim::getRegisters() {
-  return RegisterFile(this);
+RegisterFileRef PyRaspsim::getRegisters() {
+  return RegisterFileRef(this);
 }
 
 #define REG64(r)                                                                                                       \
   def_property(                                                                                                        \
-      #r, [](RegisterFile& r) { return r.getGPRegImpl<W64, 64>(REG_##r); },                                            \
-      [](RegisterFile& r, W64 value) { r.setGPRegImpl<W64, 64>(REG_##r, value); })
+      #r, [](RegisterFileRef& r) { return r.getGPRegImpl<word_t, 64>(Register::r); },                                  \
+      [](RegisterFileRef& r, word_t value) { r.setGPRegImpl<word_t, 64>(Register::r, value); })
 
 #define REG32(name, r)                                                                                                 \
   def_property(                                                                                                        \
-      #name, [](RegisterFile& r) { return r.getGPRegImpl<W32, 32, 0>(REG_##r); },                                      \
-      [](RegisterFile& r, W32 value) { r.setGPRegImpl<W32, 32, 0, true>(REG_##r, value); })
+      #name, [](RegisterFileRef& r) { return r.getGPRegImpl<std::uint32_t, 32, 0>(Register::r); },                     \
+      [](RegisterFileRef& r, std::uint32_t value) { r.setGPRegImpl<std::uint32_t, 32, 0, true>(Register::r, value); })
 
 #define REG16(name, r)                                                                                                 \
   def_property(                                                                                                        \
-      #name, [](RegisterFile& r) { return r.getGPRegImpl<W16, 16>(REG_##r); },                                         \
-      [](RegisterFile& r, W16 value) { r.setGPRegImpl<W16, 16>(REG_##r, value); })
+      #name, [](RegisterFileRef& r) { return r.getGPRegImpl<std::uint16_t, 16>(Register::r); },                        \
+      [](RegisterFileRef& r, std::uint16_t value) { r.setGPRegImpl<std::uint16_t, 16>(Register::r, value); })
 
 #define REG8(name, r, offset)                                                                                          \
   def_property(                                                                                                        \
-      #name, [](RegisterFile& r) { return r.getGPRegImpl<W8, 8, offset>(REG_##r); },                                   \
-      [](RegisterFile& r, W8 value) { r.setGPRegImpl<W8, 8, offset>(REG_##r, value); })
+      #name, [](RegisterFileRef& r) { return r.getGPRegImpl<std::uint8_t, 8, offset>(Register::r); },                  \
+      [](RegisterFileRef& r, std::uint8_t value) { r.setGPRegImpl<std::uint8_t, 8, offset>(Register::r, value); })
 
 #define REG8L(name, r) REG8(name, r, 0)
-
 #define REG8H(name, r) REG8(name, r, 8)
 
-#define REGXMM(n) def_property_readonly("xmm" #n, [](RegisterFile& r) { return XMMRegister(r.sim, REG_xmml##n); })
+#define REGXMM(n)                                                                                                      \
+  def_property_readonly("xmm" #n, [](RegisterFileRef& r) { return XMMRegister(r.sim, XmmRegister::xmm##n); })
 
-#define EXCEPTION(name) py::register_exception<Raspsim##name>(m, #name)
+#define EXCEPTION(name) py::register_exception<Raspsim##name>(m, #name, base_exc.ptr())
 
 PYBIND11_MODULE(core, m) {
-  m.doc() = "python binding for raspsim, a cycle-accurate x86 simulator based on "
-            "PTLsim";
+  m.doc() = "python binding for x86sim, a cycle-accurate x86 simulator based on PTLsim";
 
   py::class_<AddrRef>(m, "Address")
       .def("__add__", &AddrRef::operator+, "offset"_a, "Add an offset to the address")
@@ -515,8 +480,8 @@ PYBIND11_MODULE(core, m) {
       .def("__gt__", &AddrRef::operator>, "other"_a, "Check if the address is greater than another address")
       .def("__ge__", &AddrRef::operator>=, "other"_a,
            "Check if the address is greater than or equal to another address")
-      .def("__hash__", [](const AddrRef& a) { return std::hash<Waddr>{}(a.virtaddr); })
-      .def("__int__", &AddrRef::operator Waddr, "Get the address as an integer")
+      .def("__hash__", [](const AddrRef& a) { return std::hash<address_t>{}(a.virtaddr); })
+      .def("__int__", &AddrRef::operator address_t, "Get the address as an integer")
       .def("read", &AddrRef::read, "size"_a = 1, "Read data from the address")
       .def("write", &AddrRef::write, "value"_a, "Write data to the address");
 
@@ -538,7 +503,7 @@ PYBIND11_MODULE(core, m) {
   m.def("getProtFromELFSegment", &getProtFromELFSegment, "flags"_a,
         "Get the protection as Raspsim Prot from ELF segment flags");
 
-  py::register_exception<RaspsimException>(m, "RaspsimException");
+  auto base_exc = py::register_exception<RaspsimException>(m, "RaspsimException");
 
   EXCEPTION(DivideException);
   EXCEPTION(DebugException);
@@ -563,7 +528,7 @@ PYBIND11_MODULE(core, m) {
 
   py::class_<XMMRegister>(m, "XMMRegister", "A class to access the XMM registers of the virtual CPU")
       .def_property("sd", &XMMRegister::template getSingle<double>, &XMMRegister::template setSingle<double>)
-      .def_property("ss", &XMMRegister::template getSingle<float>, &XMMRegister::template getSingle<float>)
+      .def_property("ss", &XMMRegister::template getSingle<float>, &XMMRegister::template setSingle<float>)
       .def_property("pd", &XMMRegister::template getPacked<double, double>,
                     &XMMRegister::template setPacked<double, double>)
       .def_property("ps", &XMMRegister::template getPacked<float, float, float, float>,
@@ -574,9 +539,9 @@ PYBIND11_MODULE(core, m) {
                     &XMMRegister::template setPacked<char, char, char, char, char, char, char, char, char, char, char,
                                                      char, char, char, char, char>);
 
-  py::class_<RegisterFile>(m, "RegisterFile", "A class to access the registers of the virtual CPU")
-      .def("__getitem__", &RegisterFile::getRegister, "regname"_a, "Get the value of a register")
-      .def("__setitem__", &RegisterFile::setRegister, "regname"_a, "value"_a, "Set the value of a register")
+  py::class_<RegisterFileRef>(m, "RegisterFile", "A class to access the registers of the virtual CPU")
+      .def("__getitem__", &RegisterFileRef::getRegister, "regname"_a, "Get the value of a register")
+      .def("__setitem__", &RegisterFileRef::setRegister, "regname"_a, "value"_a, "Set the value of a register")
       .REG64(rip)
       .REG64(rax)
       .REG64(rbx)
@@ -634,51 +599,19 @@ PYBIND11_MODULE(core, m) {
       .REGXMM(13);
 
   py::class_<PyRaspsim>(m, "Core", "A class to interact with the simulator")
-      .def(py::init<const char*>(), "logfile"_a = "/dev/null", "Create a new Raspsim instance")
+      .def(py::init<const char*, bool, bool, bool, bool>(), "logfile"_a = "/dev/null", "sse"_a = true, "x87"_a = true,
+           "perfect_cache"_a = false, "static_branchpred"_a = false, "Create a new Raspsim instance")
       .def_property_readonly("registers", &PyRaspsim::getRegisters, "Get the register file")
       .def("run", &PyRaspsim::run, "Run the simulator for a number of instructions",
-           "ninstr"_a = (unsigned long long)-1)
-      .def("disableSSE", &PyRaspsim::disableSSE, "Disable SSE")
-      .def("disableX87", &PyRaspsim::disableX87, "Disable X87")
-      .def("enablePerfectCache", &PyRaspsim::enablePerfectCache, "Enable perfect cache")
-      .def("enableStaticBranchPrediction", &PyRaspsim::enableStaticBranchPrediction, "Enable static branch prediction")
+           "ninstr"_a = static_cast<unsigned long long>(-1))
       .def_property_readonly("cycles", &PyRaspsim::cycles, "Get the number of cycles")
       .def_property_readonly("instructions", &PyRaspsim::instructions, "Get the number of instructions")
-      .def("memmap", &PyRaspsim::memmap,
-           "Map a range of memory to the virtual address space of the "
-           "simulator",
-           "start"_a, "prot"_a, "length"_a = 0, "data"_a = py::bytes(),
+      .def("memmap", &PyRaspsim::memmap, "start"_a, "prot"_a, "length"_a = 0, "data"_a = py::bytes(),
            "Map a range of memory to the virtual address space of the "
            "simulator.\n\nMaps data from `data` into memory and fills the "
            "rest with zeros if `length` is greater than the size of `data`. "
            "If `length` is 0, the size of `data` will be used as length.")
       .def_property_readonly(
           "memimg", [](PyRaspsim& sim) { return MemImg(sim); }, "Get a memory image object")
-      .def("__str__", &PyRaspsim::str,
-           "Get the string representation of the current state of the "
-           "simulator");
-}
-
-void Raspsim::propagate_x86_exception(byte exception, W32 errorcode, Waddr virtaddr) {
-  PyRaspsim::X86Exception = {exception, errorcode, virtaddr, getContext()};
-  longjmp(PyRaspsim::simexit, 1);
-}
-
-void Raspsim::handle_syscall_32bit(int semantics) {
-  if (semantics == 0 /* SYSCALL_SEMANTICS_INT80 */) {
-    // Our exit operation.
-    requested_switch_to_native = 1;
-  } else {
-    PyRaspsim::X86Exception = {"Syscall not supported"};
-    longjmp(PyRaspsim::simexit, 1);
-  }
-}
-
-void Raspsim::handle_syscall_64bit() {
-  PyRaspsim::X86Exception = {"Syscall not supported"};
-  longjmp(PyRaspsim::simexit, 1);
-}
-
-CpuidResult Raspsim::handle_cpuid(W32 func, W32 subfunc) {
-  return default_cpuid(func, subfunc, Raspsim::getContext().vcpuid);
+      .def("__str__", &PyRaspsim::str, "Get the string representation of the current state of the simulator");
 }

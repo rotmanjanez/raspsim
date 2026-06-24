@@ -1,6 +1,18 @@
-# RASPsim
+# x86sim
 
-`RASPsim` is a cycle-accurate x86-64 simulator, originally developed by Alexis Engelke as a fork of PTLsim by Matt Yourst. This package provides Python bindings to `RASPsim`, allowing you to configure the virtual address space, set initial register values, and run simulations of ELF binaries directly from Python.
+`x86sim` is a cycle-accurate x86-64 simulator, originally developed by Alexis Engelke as a fork of PTLsim by Matt Yourst. This package provides Python bindings to the `x86sim` C++ library, allowing you to configure the virtual address space, set initial register values, and run simulations of ELF binaries directly from Python.
+
+## Installation
+
+The extension is built from the in-tree C++ core via CMake (driven by
+[scikit-build-core](https://scikit-build-core.readthedocs.io/)). From this
+directory:
+
+```bash
+pip install .
+```
+
+A C++26-capable compiler and CMake >= 3.25 are required.
 
 ## Features
 
@@ -55,9 +67,9 @@ Represents N-bit integers with proper wrapping and arithmetic operations. Useful
 ### Compiling and Loading an ELF Binary
 
 ```python
-from raspsim.utils import rscompile, asm_preamble, asm_stop_sim
-from raspsim.elf import ELF
-from raspsim.raspsim import Raspsim
+from x86sim.utils import rscompile, asm_preamble, asm_stop_sim
+from x86sim.elf import ELF
+from x86sim import Raspsim
 
 # Write your assembly code
 code = asm_preamble() + """
@@ -119,7 +131,7 @@ except RaspsimException as e:
 You can use raspsim as a command-line tool to simulate code directly from the terminal.
 
 ```bash
-python -m raspsim << EOF
+python -m x86sim << EOF
 .global _start
 .intel_syntax noprefix
 .text
