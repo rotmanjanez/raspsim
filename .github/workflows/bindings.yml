@@ -1,0 +1,57 @@
+name: Build Python Package
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+  build:
+    runs-on: self-hosted
+
+    steps:
+      - uses: actions/checkout@v4
+        
+      - name: Install dependencies
+        run: |
+          python3 -m venv venv
+          source venv/bin/activate
+          pip3 install -r requirements.txt
+
+      - name: Build Python Bindings
+        run: |
+          for PYTHON_VERSION in 3.7 3.8 3.9 3.10 3.11 3.12 3.13 3.14 3.15; do
+              docker run --rm -v "$(pwd)":/raspsim python:"$PYTHON_VERSION" ./raspsim/.github/workflows/build-python.sh &
+          done
+
+          wait 
+          
+      - name: Build a binary wheel and a source tarball
+        run: python3 -m build pyraspsim
+      
+      - name: Store the distribution packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-package-distributions
+          path: pyraspsim/dist
+        
+  publish-to-pypi:
+    name: Publish Python 🐍 distribution 📦 to PyPI
+    needs:
+      - build
+    runs-on: self-hosted
+    environment:
+      name: pypi
+      url: https://pypi.org/p/raspsim
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Download all the dists
+        uses: actions/download-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+      - name: Publish distribution 📦 to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
