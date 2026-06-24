@@ -1074,8 +1074,16 @@ bool TraceDecoder::decode_sse() {
     DECODE(iform, imm, b_mode);
     EndOfDecode();
 
-    int rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
     int rdreg = arch_pseudo_reg_to_arch_reg[rd.reg.reg];
+    int rareg;
+
+    if (ra.type == OPTYPE_MEM) {
+      // pinsrw can take a 16-bit memory source: load it into a temp first.
+      rareg = REG_temp0;
+      operand_load(rareg, ra, OP_ld);
+    } else {
+      rareg = arch_pseudo_reg_to_arch_reg[ra.reg.reg];
+    }
 
     int which = bit(imm.imm.imm, 2);
     int shift = lowbits(imm.imm.imm, 3) * 16;
