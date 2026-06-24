@@ -4,7 +4,7 @@
 //
 // Copyright 2020-2020 Alexis Engelke <engelke@in.tum.de>
 //
-#include "x86sim-support/defaults.hpp"
+#include "x86sim-support/cpuid.hpp"
 #include "x86sim/x86sim.hpp"
 #include "x86sim/logging.h"
 

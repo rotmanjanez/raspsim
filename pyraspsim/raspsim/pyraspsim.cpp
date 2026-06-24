@@ -110,8 +110,6 @@ protected:
   Raspsim* sim;
 };
 
-extern bool ensureMachineInitialized(PTLsimMachine& m, const char* machinename);
-extern void simulateInitializedMachine(PTLsimMachine& m);
 
 class RaspsimException : public std::exception {
 public:
@@ -259,7 +257,7 @@ void PyRaspsim::run(unsigned long long ninstr) {
     throw py::value_error(std::string("Cannot find core named '") + getCoreName() + "'");
   }
 
-  if (ensureMachineInitialized(*machine, getCoreName())) {
+  if (vcore::ensureMachineInitialized(*machine, getCoreName())) {
     throw std::runtime_error(std::string("Cannot initialize core model for '") + getCoreName() + "'");
   }
 
@@ -289,7 +287,7 @@ void PyRaspsim::run(unsigned long long ninstr) {
       throw X86Exception;
     }
   } else {
-    simulateInitializedMachine(*machine);
+    vcore::simulateInitializedMachine(*machine);
     if (instructions() >= ninstr) {
       throw py::stop_iteration("Reached instruction limit");
     }

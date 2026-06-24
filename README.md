@@ -1,19 +1,36 @@
-# RASPsim
+# x86sim
 
-RASPsim is a cycle-accurate x86-64 simulator, forked off from PTLsim. The
-`raspsim` simulator allows to configure the virtual address space and initial
-register values as required, start simulation, and get back the latest register
-state, requested memory dumps, and the number of cycles and instructions
-simulated.
+x86sim is a cycle-accurate x86-64 simulator built around a reusable virtual CPU
+core. It descends from PTLsim by way of RASPsim (see
+[Acknowledgements](#acknowledgements)). The core is exposed as a library
+(`x86sim::x86sim`) so it can be embedded; two command-line front-ends ship with
+it:
+
+- `raspsim` -- the classic RASPsim-style CLI that configures the virtual address
+  space and initial register values, runs the simulation, and reports the final
+  register state, requested memory dumps, and the cycle/instruction counts.
+- `x86sim-linux` -- a front-end that runs Linux user-space programs.
 
 ### Compile
-The code can be compiled using `make` (optionally increasing parallelism) on a
-recent Linux distribution. Compilation has been tested with Fedora 31.
+
+The build is driven by CMake (3.25+). A thin `make` wrapper around the CMake
+presets is provided:
+
 ```
-make -j8
+make            # configures and builds the `debug` preset
+make release    # release build
+make test       # build + run the CTest suite
 ```
 
-### Raspsim Example
+You can also invoke CMake directly:
+
+```
+cmake --preset release
+cmake --build --preset release
+```
+
+### raspsim Example
+
 This maps an empty 4k page of memory at address `0x200000`, writes some
 instruction bytes at that address (`mov eax, 0x112233; int 0x80`), sets the
 instruction pointer `rip` to that address. The simulation output contains the
@@ -35,9 +52,9 @@ VCPU State:
 [...]
 ```
 
-### Raspsim commands
+### raspsim commands
 
-Raspsim is configured using command-line arguments (the `@file` syntax to read
+`raspsim` is configured using command-line arguments (the `@file` syntax to read
 commands from a file is supported as well). After all commands are processed,
 the simulation is started. The simulation stops when either `int 0x80` is
 executed or a CPU exception occurs. Syscalls are intentionally not implemented.
@@ -67,11 +84,27 @@ Supported configuration commands:
   in _low_ and _high_ registers (each 64-bit in size) and are prefixed `xmml`
   and `xmmh`, followed by the number (0--15).
 
-### License
-This code is licensed under GPLv2 and currently maintained by
-[Alexis Engelke](https://www.in.tum.de/caps/mitarbeiter/engelke/).
+### Acknowledgements
 
-### Orginal PTLsim README
+x86sim stands on the work of two earlier projects:
+
+- **PTLsim** -- the original cycle-accurate x86/x86-64 simulator by
+  [Matt T. Yourst](mailto:yourst@yourst.com), with contributions from
+  Stephan Diestelhorst (AMD) and Curtis Dunham. See the original PTLsim README
+  below.
+- **RASPsim** -- a fork of PTLsim by
+  [Alexis Engelke](https://www.in.tum.de/caps/mitarbeiter/engelke/) at TUM,
+  which trimmed PTLsim down to a deterministic, scriptable simulator core, with
+  contributions from Jonathan Hettwer and others.
+
+x86sim continues from RASPsim, restructuring it into an embeddable library with
+multiple front-ends. Thanks to everyone who contributed to the lineage.
+
+### License
+
+This code is licensed under GPLv2.
+
+### Original PTLsim README
 
 ```
 //

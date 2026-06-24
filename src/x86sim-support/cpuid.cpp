@@ -1,4 +1,4 @@
-#include "x86sim-support/defaults.hpp"
+#include "x86sim-support/cpuid.hpp"
 
 namespace x86sim::defaults {
 

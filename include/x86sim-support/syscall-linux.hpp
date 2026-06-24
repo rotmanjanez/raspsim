@@ -1,7 +1,7 @@
 #ifndef X86SIM_SUPPORT_SYSCALL_LINUX_HPP
 #define X86SIM_SUPPORT_SYSCALL_LINUX_HPP
 
-#include "x86sim-support/defaults.hpp"
+#include "x86sim-support/cpuid.hpp"
 
 #include <array>
 #include <concepts>

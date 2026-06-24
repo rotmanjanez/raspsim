@@ -1,5 +1,6 @@
 .depend
 cpuid
+ptlsim.log*
 dstbuild.temp.cpp
 ptlsim
 ptlsim.dst
@@ -22,8 +23,12 @@ CMakeFiles
 CMakeCache.txt
 cmake_install.cmake
 *.ninja*
-raspsim
+/raspsim
 build/
 compile_commands.json
 Makefile
 makefile
+
+# Built example guests (assembled from the .S sources)
+examples/linux-x86_64/echo
+examples/linux-x86_64/hello_syscalls
