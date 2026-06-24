@@ -13,7 +13,7 @@ CMAKE ?= cmake
 GEN ?= Ninja
 export CMAKE_GENERATOR := $(GEN)
 
-PRESETS := debug release relwithdeb
+PRESETS := debug release relwithdeb tsan
 CMAKE_TARGETS := raspsim x86sim vcore_defaults
 
 .PHONY: all $(PRESETS) $(CMAKE_TARGETS) test clean distclean
@@ -32,6 +32,9 @@ $(CMAKE_TARGETS):
 
 test: debug
 	ctest --test-dir build/debug --output-on-failure
+
+tsan-test: tsan
+	ctest --preset tsan
 
 # Run the configured build's clean target for every preset that exists.
 clean:
