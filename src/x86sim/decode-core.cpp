@@ -16,20 +16,6 @@
 
 namespace x86sim {
 
-BasicBlockCache bbcache;
-
-struct BasicBlockChunkListHashtableLinkManager {
-  static inline BasicBlockChunkList* objof(selflistlink* link) { return baseof(BasicBlockChunkList, hashlink, link); }
-
-  static inline W64& keyof(BasicBlockChunkList* obj) { return obj->mfn; }
-
-  static inline selflistlink* linkof(BasicBlockChunkList* obj) { return &obj->hashlink; }
-};
-
-typedef SelfHashtable<W64, BasicBlockChunkList, 16384, BasicBlockChunkListHashtableLinkManager> BasicBlockPageCache;
-
-BasicBlockPageCache bbpages;
-
 FILE* bbcache_dump_file = nullptr;
 
 //
@@ -1507,6 +1493,10 @@ void assist_invalid_opcode(Context& ctx) {
 
 static const bool log_code_page_ops = 0;
 
+BasicBlockCache::~BasicBlockCache() {
+  flush();
+}
+
 bool BasicBlockCache::invalidate(BasicBlock* bb, int reason) {
   BasicBlockChunkList* pagelist;
   if unlikely (bb->refcount) {
@@ -1522,7 +1512,7 @@ bool BasicBlockCache::invalidate(BasicBlock* bb, int reason) {
     }
   }
 
-  pagelist = bbpages.get(bb->rip.mfnlo);
+  pagelist = pages_.get(bb->rip.mfnlo);
   logging::println(logging::INFO, "Remove bb {} ({}, {} bytes) from low page list {}: loc {}:{}", (void*)bb,
                    (void*)(Waddr)bb->rip, bb->bytes, (void*)pagelist, (void*)bb->mfnlo_loc.chunk, bb->mfnlo_loc.index);
   assert(pagelist);
@@ -1530,7 +1520,7 @@ bool BasicBlockCache::invalidate(BasicBlock* bb, int reason) {
 
   int page_crossing = ((lowbits(bb->rip, 12) + (bb->bytes - 1)) >> 12);
   if (page_crossing) {
-    pagelist = bbpages.get(bb->rip.mfnhi);
+    pagelist = pages_.get(bb->rip.mfnhi);
     logging::println(logging::DEBUG, "Remove bb {} ({}, {} bytes) from high page list {}: loc {}:{}", (void*)bb,
                      (void*)(Waddr)bb->rip, bb->bytes, (void*)pagelist, (void*)bb->mfnhi_loc.chunk,
                      bb->mfnhi_loc.index);
@@ -1539,7 +1529,7 @@ bool BasicBlockCache::invalidate(BasicBlock* bb, int reason) {
   }
 
   remove(bb);
-  stats.decoder.bbcache.count = bbcache.count;
+  stats.decoder.bbcache.count = this->count;
   stats.decoder.bbcache.invalidates[reason]++;
 
   bb->free();
@@ -1560,7 +1550,7 @@ int BasicBlockCache::get_page_bb_count(Waddr mfn) {
   if unlikely (mfn == RIPVirtPhys::INVALID)
     return 0;
 
-  BasicBlockChunkList* pagelist = bbpages.get(mfn);
+  BasicBlockChunkList* pagelist = pages_.get(mfn);
 
   if unlikely (!pagelist)
     return 0;
@@ -1581,7 +1571,7 @@ bool BasicBlockCache::invalidate_page(AddressSpace& asp, Waddr mfn, int reason) 
   if unlikely (mfn == RIPVirtPhys::INVALID)
     return 0;
 
-  BasicBlockChunkList* pagelist = bbpages.get(mfn);
+  BasicBlockChunkList* pagelist = pages_.get(mfn);
 
   if (log_code_page_ops)
     logging::println(logging::INFO, "Invalidate page mfn {}: pagelist {} has {} entries (dirty? {})", mfn,
@@ -1596,8 +1586,8 @@ bool BasicBlockCache::invalidate_page(AddressSpace& asp, Waddr mfn, int reason) 
     return true;
   }
 
-  /* bbcache.invalidate calls pagelist.remove so we can't really use an iterator
-   * Hack around this by resetting the iterator after every call to bbcache.invalidate
+  /* invalidate calls pagelist.remove so we can't really use an iterator
+   * Hack around this by resetting the iterator after every call to invalidate
    * Reusing the same iterator should atleast keep the performance impact small
    */
   BasicBlockChunkList::Iterator iter(pagelist);
@@ -1610,7 +1600,7 @@ bool BasicBlockCache::invalidate_page(AddressSpace& asp, Waddr mfn, int reason) 
                        bb->bytes);
     }
 
-    if unlikely (!bbcache.invalidate(bb, reason)) {
+    if unlikely (!invalidate(bb, reason)) {
       if (log_code_page_ops) {
         logging::println(logging::DEBUG, "  Could not invalidate bb {} ({}, {} bytes): still has refcount {}",
                          (void*)bb, bb->rip, bb->bytes, bb->refcount);
@@ -1623,7 +1613,7 @@ bool BasicBlockCache::invalidate_page(AddressSpace& asp, Waddr mfn, int reason) 
   assert(pagelist->head == NULL);
   assert(pagelist->elemcount == 0);
 
-  stats.decoder.pagecache.count = bbpages.count;
+  stats.decoder.pagecache.count = pages_.count;
   stats.decoder.pagecache.invalidates[reason]++;
 
   return true;
@@ -1714,16 +1704,16 @@ int BasicBlockCache::reclaim(size_t bytesreq, int urgency) {
   //
 
   {
-    BasicBlockPageCache::Iterator iter(&bbpages);
+    BasicBlockPageCache::Iterator iter(&pages_);
     BasicBlockChunkList* page;
     int pages_freed = 0;
 
-    logging::println(logging::DEBUG, "Scanning {} code pages:", bbpages.count);
+    logging::println(logging::DEBUG, "Scanning {} code pages:", pages_.count);
     while ((page = iter.next())) {
       if (page->empty()) {
         if (!page->refcount) {
           logging::println(logging::DEBUG, "  mfn {} has no entries; freeing", page->mfn);
-          bbpages.remove(page);
+          pages_.remove(page);
           delete page;
           pages_freed++;
         } else {
@@ -1761,13 +1751,13 @@ void BasicBlockCache::flush() {
   //
 
   {
-    BasicBlockPageCache::Iterator iter(&bbpages);
+    BasicBlockPageCache::Iterator iter(&pages_);
     BasicBlockChunkList* page;
     int pages_freed = 0;
 
     while ((page = iter.next())) {
       assert(page->empty());
-      bbpages.remove(page);
+      pages_.remove(page);
       delete page;
     }
   }
@@ -1792,7 +1782,8 @@ void assist_exec_page_fault(Context& ctx) {
         "Spurious PageFaultOnExec detected at fault rip {} with faultaddr {} @ {} user commits ({} cycles)",
         (void*)(Waddr)ctx.commitarf[REG_selfrip], (void*)faultaddr, ctx.machine_impl->total_user_insns_committed,
         ctx.machine_impl->sim_cycle);
-    bbcache.invalidate(RIPVirtPhys(ctx.commitarf[REG_selfrip]).update(ctx), INVALIDATE_REASON_SPURIOUS);
+    ctx.machine_impl->bbcache->invalidate(RIPVirtPhys(ctx.commitarf[REG_selfrip]).update(ctx),
+                                          INVALIDATE_REASON_SPURIOUS);
     ctx.commitarf[REG_rip] = ctx.commitarf[REG_selfrip];
     return;
   }
@@ -2193,13 +2184,13 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, const RIPVirtPhys& rvp) {
   BasicBlockChunkList* pagelist;
 
   asp.cleardirty(bb->rip.mfnlo);
-  pagelist = bbpages.get(bb->rip.mfnlo);
+  pagelist = pages_.get(bb->rip.mfnlo);
   if (!pagelist) {
     pagelist = new BasicBlockChunkList(bb->rip.mfnlo);
     pagelist->refcount++;
-    bbpages.add(pagelist);
+    pages_.add(pagelist);
     stats.decoder.pagecache.inserts++;
-    stats.decoder.pagecache.count = bbpages.count;
+    stats.decoder.pagecache.count = pages_.count;
     pagelist->refcount--;
   }
   pagelist->refcount++;
@@ -2219,13 +2210,13 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, const RIPVirtPhys& rvp) {
 
   if (page_crossing) {
     asp.cleardirty(bb->rip.mfnhi);
-    BasicBlockChunkList* pagelisthi = bbpages.get(bb->rip.mfnhi);
+    BasicBlockChunkList* pagelisthi = pages_.get(bb->rip.mfnhi);
     if (!pagelisthi) {
       pagelisthi = new BasicBlockChunkList(bb->rip.mfnhi);
       pagelisthi->refcount++;
-      bbpages.add(pagelisthi);
+      pages_.add(pagelisthi);
       stats.decoder.pagecache.inserts++;
-      stats.decoder.pagecache.count = bbpages.count;
+      stats.decoder.pagecache.count = pages_.count;
       pagelisthi->refcount--;
     }
     pagelisthi->refcount++;
@@ -2359,7 +2350,6 @@ auto std::formatter<x86sim::BasicBlockCache>::format(x86sim::BasicBlockCache& bb
 namespace x86sim {
 
 void shutdown_decode() {
-  bbcache.flush();
   if (bbcache_dump_file) {
     std::fclose(bbcache_dump_file);
     bbcache_dump_file = nullptr;

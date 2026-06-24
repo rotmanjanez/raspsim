@@ -1069,6 +1069,7 @@ struct SequentialCore {
 
     rvp.update(ctx);
 
+    BasicBlockCache& bbcache = *machine.bbcache;
     BasicBlock* bb = bbcache(rvp);
 
     if likely (bb) {
@@ -1195,9 +1196,9 @@ struct SequentialCore {
       AddressSpace& asp = ctx.machine->address_space();
       if unlikely (asp.isdirty(rvp.mfnlo) | (asp.isdirty(rvp.mfnhi))) {
         logging::println("Self-modifying code at rip {} detected: mfn was dirty (invalidate and retry)", rvp);
-        bbcache.invalidate_page(asp, rvp.mfnlo, INVALIDATE_REASON_SMC);
+        machine.bbcache->invalidate_page(asp, rvp.mfnlo, INVALIDATE_REASON_SMC);
         if (rvp.mfnlo != rvp.mfnhi)
-          bbcache.invalidate_page(asp, rvp.mfnhi, INVALIDATE_REASON_SMC);
+          machine.bbcache->invalidate_page(asp, rvp.mfnhi, INVALIDATE_REASON_SMC);
         return SEQEXEC_SMC;
       }
 

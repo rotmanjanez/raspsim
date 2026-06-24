@@ -212,9 +212,9 @@ void ThreadContext::invalidate_smc() {
   if unlikely (smc_invalidate_pending) {
     AddressSpace& asp = ctx.machine->address_space();
     logging::println(logging::DEBUG, "SMC invalidate pending on {}", smc_invalidate_rvp);
-    bbcache.invalidate_page(asp, smc_invalidate_rvp.mfnlo, INVALIDATE_REASON_SMC);
+    core.machine.bbcache->invalidate_page(asp, smc_invalidate_rvp.mfnlo, INVALIDATE_REASON_SMC);
     if unlikely (smc_invalidate_rvp.mfnlo != smc_invalidate_rvp.mfnhi)
-      bbcache.invalidate_page(asp, smc_invalidate_rvp.mfnhi, INVALIDATE_REASON_SMC);
+      core.machine.bbcache->invalidate_page(asp, smc_invalidate_rvp.mfnhi, INVALIDATE_REASON_SMC);
     smc_invalidate_pending = 0;
   }
 }
@@ -639,6 +639,7 @@ BasicBlock* ThreadContext::fetch_or_translate_basic_block(const RIPVirtPhys& rvp
     current_basic_block = null;
   }
 
+  BasicBlockCache& bbcache = *core.machine.bbcache;
   BasicBlock* bb = bbcache(rvp);
 
   if likely (bb) {

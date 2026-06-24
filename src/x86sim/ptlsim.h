@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <format>
 #include <limits>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -68,10 +69,12 @@ inline constexpr std::string_view compiler =
 static const int MAX_TRANSOP_BUFFER_SIZE = 4;
 
 struct PTLsimStats;
+struct BasicBlockCache;
 
 struct MachineImpl {
   Machine& owner;
   Options config;
+  std::unique_ptr<BasicBlockCache> bbcache;
 
   W64 sim_cycle = 0;
   W64 unhalted_cycle_count = 0;
@@ -81,8 +84,8 @@ struct MachineImpl {
   W64 total_user_insns_committed = 0;
   W64 total_basic_blocks_committed = 0;
 
-  explicit MachineImpl(Machine& owner_, Options config_) : owner(owner_), config(std::move(config_)) {}
-  virtual ~MachineImpl() = default;
+  explicit MachineImpl(Machine& owner_, Options config_);
+  virtual ~MachineImpl();
   virtual std::string_view name() const = 0;
   virtual RegisterFile& register_file(std::size_t core_index) noexcept = 0;
   virtual const RegisterFile& register_file(std::size_t core_index) const noexcept = 0;

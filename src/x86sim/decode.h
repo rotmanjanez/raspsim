@@ -600,6 +600,16 @@ struct BasicBlockHashtableLinkManager {
   static inline selflistlink* linkof(BasicBlock* obj) { return &obj->hashlink; }
 };
 
+struct BasicBlockChunkListHashtableLinkManager {
+  static inline BasicBlockChunkList* objof(selflistlink* link) { return baseof(BasicBlockChunkList, hashlink, link); }
+
+  static inline W64& keyof(BasicBlockChunkList* obj) { return obj->mfn; }
+
+  static inline selflistlink* linkof(BasicBlockChunkList* obj) { return &obj->hashlink; }
+};
+
+using BasicBlockPageCache = SelfHashtable<W64, BasicBlockChunkList, 16384, BasicBlockChunkListHashtableLinkManager>;
+
 enum {
   INVALIDATE_REASON_SMC = 0,
   INVALIDATE_REASON_DMA,
@@ -612,6 +622,7 @@ enum {
 
 struct BasicBlockCache : public SelfHashtable<RIPVirtPhys, BasicBlock, BB_CACHE_SIZE, BasicBlockHashtableLinkManager> {
   BasicBlockCache() : SelfHashtable<RIPVirtPhys, BasicBlock, BB_CACHE_SIZE, BasicBlockHashtableLinkManager>() {}
+  ~BasicBlockCache();
 
   BasicBlock* translate(Context& ctx, const RIPVirtPhys& rvp);
   void translate_in_place(BasicBlock& targetbb, Context& ctx, Waddr rip);
@@ -622,9 +633,10 @@ struct BasicBlockCache : public SelfHashtable<RIPVirtPhys, BasicBlock, BB_CACHE_
   int get_page_bb_count(Waddr mfn);
   int reclaim(size_t reqbytes = 0, int urgency = 0);
   void flush();
-};
 
-extern BasicBlockCache bbcache;
+private:
+  BasicBlockPageCache pages_;
+};
 
 extern FILE* bbcache_dump_file;
 

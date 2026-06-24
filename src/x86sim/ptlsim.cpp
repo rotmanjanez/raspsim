@@ -10,6 +10,7 @@
 #include <fcntl.h>
 #include "globals.h"
 #include "ptlsim.h"
+#include "decode.h"
 #include "x86sim/logging.h"
 #include "stats.h"
 
@@ -23,6 +24,11 @@ PTLsimStats stats;
 
 bool logenable = 0;
 #endif
+
+MachineImpl::MachineImpl(Machine& owner_, Options config_)
+    : owner(owner_), config(std::move(config_)), bbcache(std::make_unique<BasicBlockCache>()) {}
+
+MachineImpl::~MachineImpl() = default;
 
 int MachineImpl::run() { return 0; }
 
