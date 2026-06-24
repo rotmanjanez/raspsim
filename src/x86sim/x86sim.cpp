@@ -321,13 +321,18 @@ RunResult Machine::run(RunOptions options) {
     };
   }
 
-  if (options.instruction_limit && stats().instructions >= stop_at)
-    return {.reason = StopReason::instruction_limit, .stats = stats(), .x86_exception = std::nullopt, .message = {}};
-
+  // A pending stop (guest exit, unsupported syscall, host request) takes
+  // precedence over the instruction limit: if the guest exits on the very
+  // instruction that reaches the limit, report the exit rather than masking it
+  // as a plain limit stop. This matters for single-stepping, where every step
+  // sets a one-instruction limit.
   if (pending_stop_) {
     pending_stop_->stats = stats();
     return *pending_stop_;
   }
+
+  if (options.instruction_limit && stats().instructions >= stop_at)
+    return {.reason = StopReason::instruction_limit, .stats = stats(), .x86_exception = std::nullopt, .message = {}};
 
   return {.reason = StopReason::guest_exit, .stats = stats(), .x86_exception = std::nullopt, .message = {}};
 }
