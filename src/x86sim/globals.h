@@ -450,6 +450,33 @@ inline void rawcopy(T& dest, const V& source) {
   memcpy(&dest, &source, sizeof(T));
 }
 
+static inline W64 extract_bytes(const void* target, int sizeshift, bool signext) {
+  switch (sizeshift) {
+  case 0: {
+    W8 data;
+    memcpy(&data, target, sizeof(data));
+    return signext ? static_cast<W64>(static_cast<W64s>(static_cast<W8s>(data))) : data;
+  }
+  case 1: {
+    W16 data;
+    memcpy(&data, target, sizeof(data));
+    return signext ? static_cast<W64>(static_cast<W64s>(static_cast<W16s>(data))) : data;
+  }
+  case 2: {
+    W32 data;
+    memcpy(&data, target, sizeof(data));
+    return signext ? static_cast<W64>(static_cast<W64s>(static_cast<W32s>(data))) : data;
+  }
+  case 3: {
+    W64 data;
+    memcpy(&data, target, sizeof(data));
+    return data;
+  }
+  }
+  assert(false);
+  return 0;
+}
+
 // static inline float randfloat() { return ((float)rand() / RAND_MAX); }
 
 static inline bool aligned(W64 address, int size) {

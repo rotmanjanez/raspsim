@@ -1074,25 +1074,6 @@ int ReorderBufferEntry::issuestore(LoadStoreQueueEntry& state, Waddr& origaddr, 
   return ISSUE_COMPLETED;
 }
 
-static inline W64 extract_bytes(void* target, int SIZESHIFT, bool SIGNEXT) {
-  W64 data;
-  switch (SIZESHIFT) {
-  case 0:
-    data = (SIGNEXT) ? (W64s)(*(W8s*)target) : (*(W8*)target);
-    break;
-  case 1:
-    data = (SIGNEXT) ? (W64s)(*(W16s*)target) : (*(W16*)target);
-    break;
-  case 2:
-    data = (SIGNEXT) ? (W64s)(*(W32s*)target) : (*(W32*)target);
-    break;
-  case 3:
-    data = *(W64*)target;
-    break;
-  }
-  return data;
-}
-
 int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W64 ra, W64 rb, W64 rc,
                                   PTEUpdate& pteupdate) {
   OutOfOrderCore& core = getcore();

@@ -993,9 +993,13 @@ struct OpcodeInfo {
 extern const OpcodeInfo opinfo[OP_MAX_OPCODE];
 
 inline bool isclass(int opcode, W32 opclass) {
+  if unlikely (opcode < 0 || opcode >= OP_MAX_OPCODE)
+    return false;
   return ((opinfo[opcode].opclass & opclass) != 0);
 }
 inline int opclassof(int opcode) {
+  if unlikely (opcode < 0 || opcode >= OP_MAX_OPCODE)
+    return 0;
   return lsbindex(opinfo[opcode].opclass);
 }
 
@@ -1018,7 +1022,7 @@ inline bool isbarrier(int opcode) {
   return isclass(opcode, OPCLASS_BARRIER);
 }
 inline const char* nameof(int opcode) {
-  return (opcode < OP_MAX_OPCODE) ? opinfo[opcode].name : "INVALID";
+  return (opcode >= 0 && opcode < OP_MAX_OPCODE) ? opinfo[opcode].name : "INVALID";
 }
 
 union MaskControlInfo {
