@@ -12,7 +12,7 @@
 #include "branchpred.h"
 #include "logic.h"
 #include "dcache.h"
-#include "x86sim/addrspace.h"
+#include "addrspace.h"
 
 #define INSIDE_OOOCORE
 #include "ooocore.h"

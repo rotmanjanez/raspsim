@@ -1,6 +1,6 @@
 #include "x86sim/x86sim.hpp"
 
-#include "x86sim/addrspace.h"
+#include "addrspace.h"
 #include "ooocore.h"
 #include "ptlhwdef.h"
 #include "ptlsim.h"

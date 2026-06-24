@@ -10,7 +10,7 @@
 #include "ptlsim.h"
 #include "decode.h"
 #include "stats.h"
-#include "x86sim/addrspace.h"
+#include "addrspace.h"
 #include "x86sim/logging.h"
 
 
