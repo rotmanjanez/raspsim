@@ -764,16 +764,12 @@ struct SequentialCore {
 
     if likely (exception == EXCEPTION_UnalignedAccess) {
       //
-      // If we have an unaligned access, mark all loads and stores at this
-      // macro-op's rip as being unaligned and remove the basic block from
-      // the bbcache so it gets retranslated with properly split loads
-      // and stores after we resume fetching.
+      // If we have an unaligned access, retry this dynamic load/store as
+      // a split access. Alignment depends on the current register values,
+      // so the sequential core must not cache this decision in the basic block.
       //
-      // As noted elsewhere, the bbcache is for simulator purposes only;
-      // the real hardware would detect unaligned uops in the fetch stage
-      // and split them up on the fly. For simulation, it's more efficient
-      // to just split them once in the bbcache; this has no performance
-      // effect on the cycle accurate results.
+      // The real hardware would detect unaligned uops in the fetch stage
+      // and split them up on the fly.
       //
       if unlikely (config.event_log_enabled) {
         SequentialCoreEvent* event = eventlog.add(EVENT_LOAD_STORE_UNALIGNED, ctx.vcpuid, uop, arf[REG_rip],
@@ -1164,12 +1160,6 @@ struct SequentialCore {
 
       assert(uopindex < bb->count);
 
-      if unlikely (uop.unaligned) {
-        logging::println(logging::INFO, "{:20} fetch  rip {}: split unaligned load or store {}", "", (void*)(Waddr)arf[REG_rip], uop);
-        split_unaligned(uop, unaligned_ldst_buf);
-        assert(unaligned_ldst_buf.get(uop, synthop));
-      }
-
       if likely (uop.som) {
         current_uop_in_macro_op = 0;
         bytes_in_current_insn = uop.bytes;
@@ -1289,7 +1279,10 @@ struct SequentialCore {
                              machine.total_user_insns_committed);
             event->alignfixup.uopindex = uopindex;
           }
-          bb->transops[uopindex].unaligned = 1;
+          uop.unaligned = 1;
+          logging::println(logging::INFO, "{:20} fetch  rip {}: split unaligned load or store {}", "",
+                           (void*)(Waddr)arf[REG_rip], uop);
+          split_unaligned(uop, unaligned_ldst_buf);
           continue;
         }
       } else if unlikely (br) {

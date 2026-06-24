@@ -1128,7 +1128,6 @@ struct OutOfOrderCoreEvent {
 
   OutOfOrderCoreEvent* fill(int type) {
     this->type = type;
-    cycle = sim_cycle;
     uuid = 0;
     threadid = 0xff;
     return this;

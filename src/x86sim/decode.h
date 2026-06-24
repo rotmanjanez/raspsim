@@ -300,7 +300,10 @@ struct TraceDecoder {
 
   int fillbuf(Context& ctx, byte* insnbytes_, int insnbytes_bufsize_);
   inline W64 fetch(int n) {
-    W64 r = lowbits(*((W64*)&insnbytes[byteoffset]), n * 8);
+    W64 r = 0;
+    foreach (i, n) {
+      r |= static_cast<W64>(insnbytes[byteoffset + i]) << (i * 8);
+    }
     rip += n;
     byteoffset += n;
     return r;
@@ -312,22 +315,13 @@ struct TraceDecoder {
     return r;
   }
   inline W16 fetch2() {
-    W16 r = *((W16*)&insnbytes[byteoffset]);
-    rip += 2;
-    byteoffset += 2;
-    return r;
+    return static_cast<W16>(fetch(2));
   }
   inline W32 fetch4() {
-    W32 r = *((W32*)&insnbytes[byteoffset]);
-    rip += 4;
-    byteoffset += 4;
-    return r;
+    return static_cast<W32>(fetch(4));
   }
   inline W64 fetch8() {
-    W64 r = *((W64*)&insnbytes[byteoffset]);
-    rip += 8;
-    byteoffset += 8;
-    return r;
+    return fetch(8);
   }
 
   bool invalidate();

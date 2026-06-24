@@ -81,7 +81,16 @@ struct ispointer_t<T*> {
 #define isprimitive(T) (isprimitive_t<T>::primitive)
 
 // Null pointer to the specified object type, for computing field offsets
-#define offsetof_(T, field) ((Waddr)(&(reinterpret_cast<T*>(0)->field)) - ((Waddr) reinterpret_cast<T*>(0)))
+// Field offset helper for intrusive containers and generated context loads.
+// Several simulator structures intentionally use C-style layout idioms that are
+// not standard-layout C++ types, so Clang warns at every expansion site.
+#if defined(__clang__)
+#define offsetof_(T, field)                                                                                            \
+  _Pragma("clang diagnostic push") _Pragma("clang diagnostic ignored \"-Winvalid-offsetof\"") static_cast<Waddr>(     \
+      __builtin_offsetof(T, field)) _Pragma("clang diagnostic pop")
+#else
+#define offsetof_(T, field) static_cast<Waddr>(__builtin_offsetof(T, field))
+#endif
 #define baseof(T, field, ptr) ((T*)(((byte*)(ptr)) - offsetof_(T, field)))
 // Restricted (non-aliased) pointers:
 #define noalias __restrict__
