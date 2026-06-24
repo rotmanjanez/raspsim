@@ -11,6 +11,7 @@
 #include "ptlsim.h"
 #include "config.h"
 
+#include <cerrno>
 #include <charconv>
 #include <cstddef>
 #include <fstream>
@@ -98,6 +99,31 @@ void print_hex_bytes(std::span<const std::byte> bytes, size_t splitat = 16) {
     return read | write | execute;
   return std::nullopt;
 }
+
+// raspsim is a register/memory-level simulator: a 0x80 interrupt signals the
+// guest is done, and any other syscall just returns -ENOSYS so execution can
+// continue (or be inspected).
+class CliHost : public x86sim::HostCallbacks {
+public:
+  [[nodiscard]] x86sim::CpuidResult cpuid(x86sim::Machine&, x86sim::RegisterFile&,
+                                          x86sim::CpuidRequest request) noexcept override {
+    return x86sim::defaults::default_cpuid(request);
+  }
+
+  [[nodiscard]] x86sim::SyscallResult syscall(x86sim::Machine&, x86sim::RegisterFile& context,
+                                              x86sim::SyscallKind kind) override {
+    using x86sim::Register;
+    using x86sim::StopReason;
+    if (kind == x86sim::SyscallKind::int80)
+      return {.reason = StopReason::guest_exit, .continue_execution = false, .message = {}};
+
+    context[Register::rax] = static_cast<x86sim::word_t>(-ENOSYS);
+    if (kind == x86sim::SyscallKind::syscall64)
+      context[Register::rip] = context[Register::rcx];
+
+    return {.reason = StopReason::host_request, .continue_execution = true, .message = {}};
+  }
+};
 
 [[nodiscard]] std::optional<std::vector<std::byte>> parse_hex_bytes(std::string_view hex) {
   if ((hex.size() & 1) != 0)
@@ -250,7 +276,7 @@ int main(int argc, char** argv) {
   for (const std::string& command : commands)
     handle_config_arg(nullptr, nullptr, options, command, nullptr);
 
-  x86sim::defaults::CliHost host;
+  CliHost host;
   x86sim::Machine machine(host, options);
   x86sim::RegisterFile& registers = machine.register_file(0);
   std::vector<x86sim::address_t> dump_pages;
