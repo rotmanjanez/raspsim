@@ -5,8 +5,8 @@
 ## Installation
 
 The extension is built from the in-tree C++ core via CMake (driven by
-[scikit-build-core](https://scikit-build-core.readthedocs.io/)). From this
-directory:
+[scikit-build-core](https://scikit-build-core.readthedocs.io/)). From the
+repository root:
 
 ```bash
 pip install .

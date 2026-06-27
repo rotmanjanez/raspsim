@@ -38,6 +38,7 @@ target_sources(x86sim
 )
 target_include_directories(x86sim PRIVATE src/x86sim)
 target_compile_definitions(x86sim PRIVATE ${build_info})
+target_compile_features(x86sim PUBLIC cxx_std_26)
 list(APPEND install_targets x86sim)
 
 # --- x86sim_defaults: Linux syscall + cpuid support library ---------------

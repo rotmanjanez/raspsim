@@ -1,0 +1,64 @@
+[project]
+name = "x86sim"
+version = "0.2.0"
+authors = [
+  { name="Janez Rotman", email="janez.rotman@tum.de" },
+]
+description = "Python bindings for the x86sim C++ library, a cycle-accurate x86-64 simulator based on PTLsim."
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: GNU General Public License v2 (GPLv2)",
+]
+requires-python = ">=3.9"
+dependencies = ["pyelftools"]
+readme = "pyraspsim/README.md"
+
+[project.urls]
+Homepage = "https://github.com/rotmanjanez/x86sim"
+
+[project.scripts]
+x86sim = "x86sim.__main__:main"
+
+
+[build-system]
+requires = ["scikit-build-core>=0.10", "pybind11>=2.12"]
+build-backend = "scikit_build_core.build"
+
+
+[tool.scikit-build]
+minimum-version = "build-system.requires"
+cmake.version = ">=3.25"
+# pyproject.toml lives at the repo root so the sdist can carry the whole C++
+# core (src/, include/, CMakeLists.txt, cmake/) — scikit-build-core cannot
+# reach files above the pyproject directory, which is why this is not in
+# pyraspsim/.
+cmake.source-dir = "."
+# Kept separate from the C++ preset builds under build/.
+build-dir = "build-wheel/{wheel_tag}"
+# The importable package lives under pyraspsim/; its basename becomes the
+# top-level "x86sim" package. The compiled `core` extension is installed into
+# the same package by CMake (install(TARGETS core ... DESTINATION x86sim)).
+wheel.packages = ["pyraspsim/x86sim"]
+
+# Build only the Python extension against the portable core; the Linux-only
+# support library, simulators, and CTest suite are unnecessary here.
+cmake.define.X86SIM_BUILD_PYTHON = "ON"
+cmake.define.X86SIM_BUILD_DEFAULTS = "OFF"
+cmake.define.X86SIM_BUILD_RASPSIM = "OFF"
+cmake.define.X86SIM_BUILD_LINUX = "OFF"
+cmake.define.X86SIM_BUILD_TESTS = "OFF"
+
+# Keep the sdist small and buildable: ship the C++ core and the bindings, drop
+# the 100M test corpus, docs, and example guests (none are needed to build the
+# extension).
+sdist.exclude = [
+  "tests",
+  "Documentation",
+  "examples",
+  "build",
+  "build-native",
+  "build-wheel",
+  "*.log",
+  "*.log.*",
+  "*.backup",
+]

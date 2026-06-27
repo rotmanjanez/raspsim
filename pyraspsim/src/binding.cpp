@@ -141,7 +141,8 @@ class RegisterFileRef;
 // done; any other syscall is unsupported and surfaces as an exception.
 class PyHost : public x86sim::HostCallbacks {
 public:
-  x86sim::SyscallResult syscall(x86sim::Machine&, RegisterFile&, x86sim::SyscallKind kind) override {
+  x86sim::SyscallResult syscall(x86sim::Machine&, x86sim::CpuState&, x86sim::AddressSpace&,
+                                x86sim::SyscallKind kind) override {
     using x86sim::StopReason;
     if (kind == x86sim::SyscallKind::int80)
       return {.reason = StopReason::guest_exit, .continue_execution = false, .message = {}};
@@ -149,7 +150,8 @@ public:
             .message = "Syscall not supported"};
   }
 
-  x86sim::CpuidResult cpuid(x86sim::Machine&, RegisterFile&, x86sim::CpuidRequest request) noexcept override {
+  x86sim::CpuidResult cpuid(x86sim::Machine&, x86sim::CpuState&, x86sim::AddressSpace&,
+                            x86sim::CpuidRequest request) noexcept override {
     return x86sim::defaults::default_cpuid(request);
   }
 };
@@ -172,9 +174,13 @@ public:
 
   ~PyRaspsim() { lock.unlock(); }
 
-  static constexpr word_t getPageSize() { return x86sim::Machine::kPageSize; }
+  static constexpr word_t getPageSize() { return x86sim::AddressSpace::kPageSize; }
 
   x86sim::Machine& m() { return *machine; }
+  // The architectural state and address space are caller-owned (one each here,
+  // modelling a single guest process) and handed to Machine::run.
+  x86sim::CpuState& state() { return cpu_state; }
+  x86sim::AddressSpace& space() { return address_space; }
 
   RegisterFileRef getRegisters();
 
@@ -183,11 +189,13 @@ public:
   std::size_t cycles() { return machine->stats().cycles; }
   std::size_t instructions() { return machine->stats().instructions; }
 
-  std::string str() { return std::format("{}", machine->register_file(0)); }
+  std::string str() { return std::format("{}", static_cast<x86sim::RegisterFile&>(cpu_state)); }
 
   void run(unsigned long long ninstr);
 
   PyHost host;
+  x86sim::CpuState cpu_state;
+  x86sim::AddressSpace address_space;
   std::unique_ptr<x86sim::Machine> machine;
   static std::mutex lock;
 };
@@ -197,14 +205,14 @@ std::mutex PyRaspsim::lock;
 void AddrRef::write(py::bytes&& bts) {
   std::string mem{std::move(bts)};
   auto bytes = std::as_bytes(std::span(mem.data(), mem.size()));
-  if (auto r = sim->m().write_memory(virtaddr, bytes); !r)
+  if (auto r = sim->space().write(virtaddr, bytes); !r)
     throw py::value_error(std::format("Trying to write to unmapped memory at {:x}: {}", virtaddr, r.error()));
 }
 
 py::bytes AddrRef::read(word_t size) {
   std::string out(size, '\0');
   auto bytes = std::as_writable_bytes(std::span(out.data(), out.size()));
-  if (auto r = sim->m().read_memory_into(virtaddr, bytes); !r)
+  if (auto r = sim->space().read(virtaddr, bytes); !r)
     throw py::value_error(std::format("Trying to read from unmapped memory at {:x}: {}", virtaddr, r.error()));
   return {std::move(out)};
 }
@@ -221,12 +229,12 @@ AddrRef PyRaspsim::memmap(address_t start, Prot prot, word_t length, py::bytes d
     throw py::value_error("Cannot map zero length data");
 
   word_t offset = start % getPageSize();
-  if (auto r = machine->map(start - offset, length + offset, toProtection(prot)); !r)
+  if (auto r = address_space.map(start - offset, length + offset, toProtection(prot)); !r)
     throw py::value_error(std::format("Cannot map memory at {:x}: {}", start, r.error()));
 
   if (!bytes.empty()) {
     auto raw = std::as_bytes(std::span(bytes.data(), bytes.size()));
-    if (auto r = machine->write_memory(start, raw); !r)
+    if (auto r = address_space.write(start, raw); !r)
       throw py::value_error(std::format("Cannot write mapped memory at {:x}: {}", start, r.error()));
   }
   return AddrRef(this, start);
@@ -241,7 +249,7 @@ void PyRaspsim::run(unsigned long long ninstr) {
   if (ninstr != static_cast<unsigned long long>(-1))
     run_options.instruction_limit = ninstr;
 
-  x86sim::RunResult result = machine->run(run_options);
+  x86sim::RunResult result = machine->run(cpu_state, address_space, run_options);
 
   using x86sim::StopReason;
   switch (result.reason) {
@@ -313,7 +321,7 @@ public:
                   "bits");
 
     std::tuple<T, Ts...> result;
-    XmmValue value = sim->m().register_file(0)[reg];
+    XmmValue value = sim->state()[reg];
     std::array<word_t, 2> raw = {value.lo, value.hi};
     std::memcpy(static_cast<void*>(&std::get<0>(result)), raw.data(), NItems * sizeof(T));
     return result;
@@ -336,7 +344,7 @@ public:
 
     std::array<word_t, 2> raw = {0, 0};
     std::memcpy(raw.data(), static_cast<void*>(&std::get<0>(value)), NItems * sizeof(T));
-    sim->m().register_file(0)[reg] = XmmValue{raw[0], raw[1]};
+    sim->state()[reg] = XmmValue{raw[0], raw[1]};
   }
 
   template<typename T>
@@ -387,14 +395,14 @@ public:
     auto reg = registerFromName(regname);
     if (!reg)
       throw py::value_error(std::string("Invalid register name '") + regname + "'");
-    return sim->m().register_file(0)[*reg];
+    return sim->state()[*reg];
   }
 
   void setRegister(std::string&& regname, word_t value) {
     auto reg = registerFromName(regname);
     if (!reg)
       throw py::value_error(std::string("Invalid register name '") + regname + "'");
-    sim->m().register_file(0)[*reg] = value;
+    sim->state()[*reg] = value;
   }
 
   template<typename T, int Bits, int Offset = 0>
@@ -404,7 +412,7 @@ public:
     static_assert(Bits % 8 == 0, "Bits must be a multiple of 8");
 
     word_t mask = Bits == 64 ? ~word_t{0} : ((word_t{1} << Bits) - 1);
-    return (sim->m().register_file(0)[reg] >> Offset) & mask;
+    return (sim->state()[reg] >> Offset) & mask;
   }
 
   template<typename T, unsigned Bits, unsigned Offset = 0, bool ZeroHigh = false>
@@ -417,7 +425,7 @@ public:
                   "ZeroHigh can only be used with 32-bit registers at offset 0");
     static_assert(!(Offset > 0 && Bits != 8), "Offset can only be used with 8-bit registers");
 
-    word_t current = sim->m().register_file(0)[reg];
+    word_t current = sim->state()[reg];
     int rshift = ZeroHigh ? 0 : 64 - Bits;
 
     // mask contains 1s in the bits that are not part of the register that
@@ -429,7 +437,7 @@ public:
     mask = Bits == 64 ? ~word_t{0} : ((word_t{1} << Bits) - 1);
     current |= (static_cast<word_t>(value) & mask) << Offset;
 
-    sim->m().register_file(0)[reg] = current;
+    sim->state()[reg] = current;
   }
 
   PyRaspsim* sim;
