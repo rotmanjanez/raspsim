@@ -25,7 +25,7 @@ from inspect import cleandoc
 
 
 @contextmanager
-def rscompile(
+def simcompile(
     *,
     code: str | None = None,
     file: str | Path | None = None,
@@ -111,17 +111,3 @@ def rscompile(
         f.seek(0)
         yield f
 
-
-def asm_preamble(label: str = "_start") -> str:
-    return cleandoc(
-        f"""
-        .intel_syntax noprefix
-        .global {label}
-        .section .text
-        {label}:
-        """
-    )
-
-
-def asm_stop_sim() -> str:
-    return "int 0x80\n"
