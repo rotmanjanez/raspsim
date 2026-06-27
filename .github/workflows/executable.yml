@@ -8,14 +8,24 @@ on:
 
 jobs:
   build:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
+
+    # ubuntu-latest ships GCC 13, which does not accept -std=c++26. Install a
+    # C++26-capable toolchain (and Ninja, the default generator) and point the
+    # build at it.
+    env:
+      CC: gcc-14
+      CXX: g++-14
 
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y g++-14 ninja-build cmake
+
       - name: Build raspsim Executable
         run: make -j$(nproc) raspsim
-      
+
       - name: Upload raspsim Executable
         uses: actions/upload-artifact@v4
         with:
