@@ -3,11 +3,11 @@ from __future__ import annotations
 from typing import Literal
 from pathlib import Path
 
-from .core import Core, RaspsimException
+from .bindings import Machine as _Machine, RaspsimException
 from .elf import ELF
 
 
-class Raspsim(Core):
+class Machine(_Machine):
     def __init__(self):
         super().__init__()
         self._current_elf: ELF | None = None
@@ -17,7 +17,7 @@ class Raspsim(Core):
         Populate the simulator with the ELF binary data.
 
         Args:
-            sim: Raspsim instance.
+            sim: Machine instance.
             elf: ELF binary data.
             abi: ABI to use. Currently only supports sysv.
         """

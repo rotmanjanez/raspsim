@@ -5,7 +5,7 @@ from typing import IO
 
 from elftools.elf.elffile import ELFFile
 
-from .core import Prot, getProtFromELFSegment, RaspsimException
+from .bindings import Prot, getProtFromELFSegment, RaspsimException
 
 
 @dataclass

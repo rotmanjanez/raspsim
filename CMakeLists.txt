@@ -98,13 +98,13 @@ install(EXPORT x86simTargets
 # which points scikit-build-core at this file and disables the Linux tools.
 if(X86SIM_BUILD_PYTHON)
   find_package(pybind11 CONFIG REQUIRED)
-  pybind11_add_module(core MODULE
-    pyraspsim/src/binding.cpp
+  pybind11_add_module(bindings MODULE
+    src/bindings/binding.cpp
     src/x86sim-support/cpuid.cpp
   )
-  target_link_libraries(core PRIVATE x86sim::x86sim)
-  target_include_directories(core PRIVATE include)
-  install(TARGETS core LIBRARY DESTINATION x86sim)
+  target_link_libraries(bindings PRIVATE x86sim::x86sim)
+  target_include_directories(bindings PRIVATE include)
+  install(TARGETS bindings LIBRARY DESTINATION x86sim)
 endif()
 
 # --- tests ----------------------------------------------------------------

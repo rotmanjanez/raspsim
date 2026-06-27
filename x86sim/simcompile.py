@@ -7,7 +7,7 @@ Classes:
     InvalidELFException: Exception raised for invalid ELF files.
 
 Functions:
-    rscompile: Context manager to compile code to an ELF binary.
+    simcompile: Context manager to compile code to an ELF binary.
     elf_add_trampoline: Adds a trampoline to the ELF binary.
     asm_preamble: Generates an assembly preamble.
     asm_stop_sim: Generates an assembly instruction to stop the simulator.

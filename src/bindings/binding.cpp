@@ -63,11 +63,11 @@ Prot getProtFromELFSegment(int flags) {
   return static_cast<Prot>(prot);
 }
 
-class PyRaspsim;
+class PyMachine;
 
 class AddrRef {
 public:
-  AddrRef(PyRaspsim* sim, address_t virtaddr) : virtaddr(virtaddr), sim(sim) {}
+  AddrRef(PyMachine* sim, address_t virtaddr) : virtaddr(virtaddr), sim(sim) {}
   AddrRef() : virtaddr(0), sim(nullptr) {}
 
   operator address_t() const { return virtaddr; }
@@ -88,7 +88,7 @@ public:
   address_t virtaddr;
 
 protected:
-  PyRaspsim* sim;
+  PyMachine* sim;
 };
 
 class RaspsimException : public std::exception {
@@ -107,10 +107,10 @@ private:
 };
 
 #define RASPSIM_INHERIT_EXCEPTION(name)                                                                                \
-  class name : public RaspsimException {                                                                              \
+  class name : public RaspsimException {                                                                               \
   public:                                                                                                              \
-    name(const RaspsimException& e) : RaspsimException(e) {}                                                          \
-    name(RaspsimException&& e) : RaspsimException(std::move(e)) {}                                                    \
+    name(const RaspsimException& e) : RaspsimException(e) {}                                                           \
+    name(RaspsimException&& e) : RaspsimException(std::move(e)) {}                                                     \
   }
 
 // X86 exceptions in order of their exception numbers
@@ -146,8 +146,7 @@ public:
     using x86sim::StopReason;
     if (kind == x86sim::SyscallKind::int80)
       return {.reason = StopReason::guest_exit, .continue_execution = false, .message = {}};
-    return {.reason = StopReason::unsupported_syscall, .continue_execution = false,
-            .message = "Syscall not supported"};
+    return {.reason = StopReason::unsupported_syscall, .continue_execution = false, .message = "Syscall not supported"};
   }
 
   x86sim::CpuidResult cpuid(x86sim::Machine&, x86sim::CpuState&, x86sim::AddressSpace&,
@@ -156,9 +155,9 @@ public:
   }
 };
 
-class PyRaspsim {
+class PyMachine {
 public:
-  PyRaspsim(const char* logfile, bool sse, bool x87, bool perfect_cache, bool static_branchpred) {
+  PyMachine(const char* logfile, bool sse, bool x87, bool perfect_cache, bool static_branchpred) {
     if (!lock.try_lock())
       throw py::value_error("Only one instance of Raspsim can be used at a time");
 
@@ -172,7 +171,7 @@ public:
     machine = std::make_unique<x86sim::Machine>(host, options);
   }
 
-  ~PyRaspsim() { lock.unlock(); }
+  ~PyMachine() { lock.unlock(); }
 
   static constexpr word_t getPageSize() { return x86sim::AddressSpace::kPageSize; }
 
@@ -200,7 +199,7 @@ public:
   static std::mutex lock;
 };
 
-std::mutex PyRaspsim::lock;
+std::mutex PyMachine::lock;
 
 void AddrRef::write(py::bytes&& bts) {
   std::string mem{std::move(bts)};
@@ -217,7 +216,7 @@ py::bytes AddrRef::read(word_t size) {
   return {std::move(out)};
 }
 
-AddrRef PyRaspsim::memmap(address_t start, Prot prot, word_t length, py::bytes data) {
+AddrRef PyMachine::memmap(address_t start, Prot prot, word_t length, py::bytes data) {
   std::string bytes = std::move(data);
   if (bytes.size() > 0) {
     if (length > 0 && bytes.size() > length)
@@ -244,7 +243,7 @@ AddrRef PyRaspsim::memmap(address_t start, Prot prot, word_t length, py::bytes d
   case i:                                                                                                              \
     throw cls(std::move(exc));
 
-void PyRaspsim::run(unsigned long long ninstr) {
+void PyMachine::run(unsigned long long ninstr) {
   x86sim::RunOptions run_options;
   if (ninstr != static_cast<unsigned long long>(-1))
     run_options.instruction_limit = ninstr;
@@ -258,8 +257,8 @@ void PyRaspsim::run(unsigned long long ninstr) {
   case StopReason::instruction_limit:
     throw py::stop_iteration("Reached instruction limit");
   case StopReason::x86_exception: {
-    RaspsimException exc = result.x86_exception ? RaspsimException(*result.x86_exception)
-                                                : RaspsimException("Unknown x86 exception");
+    RaspsimException exc =
+        result.x86_exception ? RaspsimException(*result.x86_exception) : RaspsimException("Unknown x86 exception");
     switch (result.x86_exception ? static_cast<int>(result.x86_exception->vector) : -1) {
       THROW(0, RaspsimDivideException)
       THROW(1, RaspsimDebugException)
@@ -295,9 +294,9 @@ void PyRaspsim::run(unsigned long long ninstr) {
 std::optional<Register> registerFromName(std::string_view name) {
   using enum Register;
   static constexpr std::pair<std::string_view, Register> names[] = {
-      {"rax", rax}, {"rcx", rcx}, {"rdx", rdx}, {"rbx", rbx}, {"rsp", rsp}, {"rbp", rbp}, {"rsi", rsi}, {"rdi", rdi},
-      {"r8", r8},   {"r9", r9},   {"r10", r10}, {"r11", r11}, {"r12", r12}, {"r13", r13}, {"r14", r14}, {"r15", r15},
-      {"rip", rip}, {"flags", flags},
+      {"rax", rax}, {"rcx", rcx}, {"rdx", rdx}, {"rbx", rbx}, {"rsp", rsp}, {"rbp", rbp},
+      {"rsi", rsi}, {"rdi", rdi}, {"r8", r8},   {"r9", r9},   {"r10", r10}, {"r11", r11},
+      {"r12", r12}, {"r13", r13}, {"r14", r14}, {"r15", r15}, {"rip", rip}, {"flags", flags},
   };
   for (auto [reg_name, reg] : names) {
     if (name == reg_name)
@@ -308,7 +307,7 @@ std::optional<Register> registerFromName(std::string_view name) {
 
 class XMMRegister {
 public:
-  XMMRegister(PyRaspsim* sim, XmmRegister reg) : sim(sim), reg(reg) {}
+  XMMRegister(PyMachine* sim, XmmRegister reg) : sim(sim), reg(reg) {}
 
   template<typename T, typename... Ts>
   std::tuple<T, Ts...> getPacked() {
@@ -353,13 +352,13 @@ public:
   }
 
 private:
-  PyRaspsim* sim;
+  PyMachine* sim;
   XmmRegister reg;
 };
 
 class MemImg {
 public:
-  MemImg(PyRaspsim& sim) : sim(&sim) {}
+  MemImg(PyMachine& sim) : sim(&sim) {}
 
   py::bytes getitem(const py::slice& s) const {
     auto startstop = validateSlice(s);
@@ -381,7 +380,7 @@ private:
     return {s.attr("start").cast<address_t>(), s.attr("stop").cast<word_t>()};
   }
 
-  PyRaspsim* sim;
+  PyMachine* sim;
 };
 
 class RegisterFileRef {
@@ -389,7 +388,7 @@ class RegisterFileRef {
 
 public:
   RegisterFileRef() = delete;
-  RegisterFileRef(PyRaspsim* sim) : sim(sim) {}
+  RegisterFileRef(PyMachine* sim) : sim(sim) {}
 
   word_t getRegister(std::string&& regname) {
     auto reg = registerFromName(regname);
@@ -440,10 +439,10 @@ public:
     sim->state()[reg] = current;
   }
 
-  PyRaspsim* sim;
+  PyMachine* sim;
 };
 
-RegisterFileRef PyRaspsim::getRegisters() {
+RegisterFileRef PyMachine::getRegisters() {
   return RegisterFileRef(this);
 }
 
@@ -475,7 +474,7 @@ RegisterFileRef PyRaspsim::getRegisters() {
 
 #define EXCEPTION(name) py::register_exception<Raspsim##name>(m, #name, base_exc.ptr())
 
-PYBIND11_MODULE(core, m) {
+PYBIND11_MODULE(bindings, m) {
   m.doc() = "python binding for x86sim, a cycle-accurate x86 simulator based on PTLsim";
 
   py::class_<AddrRef>(m, "Address")
@@ -606,20 +605,20 @@ PYBIND11_MODULE(core, m) {
       .REGXMM(12)
       .REGXMM(13);
 
-  py::class_<PyRaspsim>(m, "Core", "A class to interact with the simulator")
+  py::class_<PyMachine>(m, "Machine", "A class to interact with the simulator")
       .def(py::init<const char*, bool, bool, bool, bool>(), "logfile"_a = "/dev/null", "sse"_a = true, "x87"_a = true,
-           "perfect_cache"_a = false, "static_branchpred"_a = false, "Create a new Raspsim instance")
-      .def_property_readonly("registers", &PyRaspsim::getRegisters, "Get the register file")
-      .def("run", &PyRaspsim::run, "Run the simulator for a number of instructions",
+           "perfect_cache"_a = false, "static_branchpred"_a = false, "Create a new Machine instance")
+      .def_property_readonly("registers", &PyMachine::getRegisters, "Get the register file")
+      .def("run", &PyMachine::run, "Run the simulator for a number of instructions",
            "ninstr"_a = static_cast<unsigned long long>(-1))
-      .def_property_readonly("cycles", &PyRaspsim::cycles, "Get the number of cycles")
-      .def_property_readonly("instructions", &PyRaspsim::instructions, "Get the number of instructions")
-      .def("memmap", &PyRaspsim::memmap, "start"_a, "prot"_a, "length"_a = 0, "data"_a = py::bytes(),
+      .def_property_readonly("cycles", &PyMachine::cycles, "Get the number of cycles")
+      .def_property_readonly("instructions", &PyMachine::instructions, "Get the number of instructions")
+      .def("memmap", &PyMachine::memmap, "start"_a, "prot"_a, "length"_a = 0, "data"_a = py::bytes(),
            "Map a range of memory to the virtual address space of the "
            "simulator.\n\nMaps data from `data` into memory and fills the "
            "rest with zeros if `length` is greater than the size of `data`. "
            "If `length` is 0, the size of `data` will be used as length.")
       .def_property_readonly(
-          "memimg", [](PyRaspsim& sim) { return MemImg(sim); }, "Get a memory image object")
-      .def("__str__", &PyRaspsim::str, "Get the string representation of the current state of the simulator");
+          "memimg", [](PyMachine& sim) { return MemImg(sim); }, "Get a memory image object")
+      .def("__str__", &PyMachine::str, "Get the string representation of the current state of the simulator");
 }

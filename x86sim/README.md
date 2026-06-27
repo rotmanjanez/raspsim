@@ -25,9 +25,10 @@ A C++26-capable compiler and CMake >= 3.25 are required.
 
 ## Key Components
 
-### `Raspsim` Class
+### `Machine` Class
 
-The main class used to interact with the simulator. It provides methods to:
+The main class used to interact with the simulator (`x86sim.Machine`, a thin
+wrapper over the compiled `x86sim.bindings.Machine`). It provides methods to:
 
 - Load ELF binaries into the simulator.
 - Run the simulation.
@@ -58,7 +59,7 @@ Represents N-bit integers with proper wrapping and arithmetic operations. Useful
 
 ### Utility Functions
 
-- `rscompile`: Context manager to compile code into an ELF binary using appropriate flags.
+- `simcompile`: Context manager to compile code into an ELF binary using appropriate flags.
 - `asm_preamble`: Generates assembly code preamble with an entry label.
 - `asm_stop_sim`: Generates assembly instruction to stop the simulator (`int 0x80`).
 
@@ -67,21 +68,26 @@ Represents N-bit integers with proper wrapping and arithmetic operations. Useful
 ### Compiling and Loading an ELF Binary
 
 ```python
-from x86sim.utils import rscompile, asm_preamble, asm_stop_sim
+from x86sim.simcompile import simcompile
 from x86sim.elf import ELF
-from x86sim import Raspsim
+from x86sim import Machine
 
 # Write your assembly code
-code = asm_preamble() + """
+code = """
+.global _start
+.intel_syntax noprefix
+.text
+_start:
     mov rax, -1
-""" + asm_stop_sim()
+    int 0x80
+"""
 
 # Compile the code into an ELF binary
-with rscompile(code=code) as f:
+with simcompile(code=code) as f:
     elf = ELF.from_file(f)
 
 # Create a simulator instance and load the ELF binary
-sim = Raspsim()
+sim = Machine()
 sim.load_elf(elf)
 
 # Run the simulation
@@ -128,7 +134,7 @@ except RaspsimException as e:
 
 ### Command-Line Interface
 
-You can use raspsim as a command-line tool to simulate code directly from the terminal.
+You can use x86sim as a command-line tool to simulate code directly from the terminal.
 
 ```bash
 python -m x86sim << EOF
@@ -142,4 +148,4 @@ EOF
 ```
 
 ## Contributing
-Contributions are welcome! Please submit pull requests or open issues for any bugs or feature requests at the [GitHub repository](https://github.com/Joshy-R/raspsim).
+Contributions are welcome! Please submit pull requests or open issues for any bugs or feature requests at the [GitHub repository](https://github.com/rotmanjanez/x86sim).
