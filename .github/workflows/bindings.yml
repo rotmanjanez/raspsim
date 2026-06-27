@@ -43,7 +43,7 @@ jobs:
           fetch-depth: 0
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@v2.21
+        uses: pypa/cibuildwheel@v4.1.0
         env:
           # x86sim needs C++26 (std::expected). The default manylinux compiler
           # is too old, so install a recent GCC toolset and point the build at
