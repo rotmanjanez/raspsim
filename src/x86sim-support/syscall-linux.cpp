@@ -384,11 +384,10 @@ std::optional<SyscallResult> SysMmap::try_syscall(Machine& machine, ProcessId co
       return detail::return_error(context, detail::linux_einval);
     mapped_address = requested_address;
   } else {
-    auto next = detail::page_align_up(next_mapping_address);
-    if (!next || *next > std::numeric_limits<address_t>::max() - *aligned_length)
+    auto allocated = detail::find_unmapped_range(space, next_mapping_address, *aligned_length);
+    if (!allocated)
       return detail::return_error(context, detail::linux_enomem);
-    mapped_address = *next;
-    next_mapping_address = mapped_address + *aligned_length;
+    mapped_address = *allocated;
   }
 
   if (mapped_address > std::numeric_limits<address_t>::max() - *aligned_length)
@@ -483,8 +482,10 @@ std::optional<SyscallResult> SysMremap::try_syscall(Machine& machine, ProcessId 
     if (old_end <= std::numeric_limits<address_t>::max() - growth &&
         detail::range_is_unmapped(space, old_end, growth)) {
       auto mapped = space.map(old_end, growth, Protection::read | Protection::write);
-      if (mapped)
+      if (mapped) {
+        next_mapping_address = std::max(next_mapping_address, old_end + growth);
         return detail::return_value(context, static_cast<std::int64_t>(old_address));
+      }
     }
 
     if ((flags & detail::linux_mremap_maymove) == 0)
