@@ -110,6 +110,59 @@ data = address.read(size=4)
 print(f"Data: {data.hex()}")
 ```
 
+### Heap and Stream I/O
+
+`Machine` is a register/memory simulator by default: an `int 0x80` stops it and
+every other syscall raises. Two opt-in features extend it, both off by default:
+
+- `heap=True` enables the Linux malloc/free heap for the guest: the `brk`,
+  `mmap`/`munmap`/`mremap` (anonymous) syscalls are emulated in-process so a
+  guest can grow its heap. With `heap=False` those syscalls raise.
+- `stdin`/`stdout`/`stderr` route the guest's `read(0, ...)` / `write(1, ...)` /
+  `write(2, ...)` to Python file-like objects (anything exposing `.read(n)` /
+  `.write(bytes)`, such as `io.BytesIO`). No host file descriptors are ever
+  touched — Python fully controls the mapping. An fd left as `None` is
+  unconfigured and a guest I/O on it raises.
+
+These features require the guest to use the 64-bit `syscall` instruction (the
+Linux syscall ABI: number in `rax`, arguments in `rdi`, `rsi`, `rdx`, ...).
+`int 0x80` remains the guest-exit sentinel.
+
+#### Capturing guest output
+
+```python
+import io
+from x86sim import Machine
+
+out = io.BytesIO()
+sim = Machine(stdout=out)
+# ... load a guest that does write(1, msg, len) then exit_group(0) via syscall ...
+sim.run()
+print(out.getvalue())  # the bytes the guest wrote; the real terminal stays silent
+```
+
+#### Feeding guest input
+
+```python
+import io
+from x86sim import Machine
+
+sim = Machine(stdin=io.BytesIO(b"hello"))
+# ... load a guest that does read(0, buf, n) via syscall ...
+sim.run()
+# the guest buffer now contains b"hello"
+```
+
+#### Enabling malloc/free (heap)
+
+```python
+from x86sim import Machine
+
+sim = Machine(heap=True)
+# ... load a guest that calls brk / anonymous mmap (e.g. via malloc) ...
+sim.run()  # heap syscalls succeed; with Machine() (heap=False) they would raise
+```
+
 ### Working with Registers
 ```python
 # Set register values

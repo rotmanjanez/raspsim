@@ -62,6 +62,28 @@ if(X86SIM_BUILD_DEFAULTS)
   list(APPEND install_targets x86sim_defaults)
 endif()
 
+# --- x86sim_posix: host-POSIX Linux syscall handlers ----------------------
+# File/socket/host-time handlers split out of x86sim_defaults so the defaults
+# library stays fully portable (no host headers). Only the native x86sim-linux
+# tool links it; raspsim and the Python wheel keep linking x86sim::defaults.
+if(X86SIM_BUILD_LINUX)
+  add_library(x86sim_posix)
+  add_library(x86sim::posix ALIAS x86sim_posix)
+  set_target_properties(x86sim_posix PROPERTIES EXPORT_NAME posix)
+  target_sources(x86sim_posix
+    PRIVATE
+      src/x86sim-support/syscall-linux-posix.cpp
+    PUBLIC
+      FILE_SET HEADERS
+      BASE_DIRS include
+      FILES
+        include/x86sim-support/syscall-linux-posix.hpp
+  )
+  target_link_libraries(x86sim_posix PUBLIC x86sim::defaults)
+  target_include_directories(x86sim_posix PRIVATE src/x86sim)
+  list(APPEND install_targets x86sim_posix)
+endif()
+
 # --- raspsim: command-line simulator --------------------------------------
 if(X86SIM_BUILD_RASPSIM)
   add_executable(raspsim
@@ -78,7 +100,7 @@ if(X86SIM_BUILD_LINUX)
   add_executable(x86sim-linux
     src/x86sim-linux/x86sim-linux.cpp
   )
-  target_link_libraries(x86sim-linux PRIVATE x86sim::defaults)
+  target_link_libraries(x86sim-linux PRIVATE x86sim::posix)
   list(APPEND install_targets x86sim-linux)
 endif()
 
@@ -93,16 +115,18 @@ install(EXPORT x86simTargets
 )
 
 # --- python bindings ------------------------------------------------------
-# The extension only links the portable core (plus cpuid), never the Linux
-# support library, so it stays buildable off-Linux. Driven by pyproject.toml,
-# which points scikit-build-core at this file and disables the Linux tools.
+# The extension links the portable support library (x86sim::defaults) for the
+# cpuid defaults and the portable Linux heap (brk/mmap) + ABI helpers. It never
+# links x86sim::posix, so the wheel stays buildable off-Linux. Driven by
+# pyproject.toml, which points scikit-build-core at this file, forces
+# X86SIM_BUILD_DEFAULTS=ON, and disables the Linux tools. (The wasm binding is a
+# separate target.)
 if(X86SIM_BUILD_PYTHON)
   find_package(pybind11 CONFIG REQUIRED)
   pybind11_add_module(bindings MODULE
     src/bindings/binding.cpp
-    src/x86sim-support/cpuid.cpp
   )
-  target_link_libraries(bindings PRIVATE x86sim::x86sim)
+  target_link_libraries(bindings PRIVATE x86sim::defaults)
   target_include_directories(bindings PRIVATE include)
   install(TARGETS bindings LIBRARY DESTINATION x86sim)
 endif()

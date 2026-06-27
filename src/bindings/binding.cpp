@@ -1,11 +1,14 @@
 #include <pybind11/pybind11.h>
 
 #include "x86sim-support/cpuid.hpp"
+#include "x86sim-support/syscall-linux.hpp"
 #include "x86sim/registerfile.hpp"
 #include "x86sim/x86sim.hpp"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <cstdint>
 #include <cstring>
 #include <format>
 #include <mutex>
@@ -14,6 +17,7 @@
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <unordered_map>
 #include <utility>
 
 namespace py = pybind11;
@@ -137,29 +141,210 @@ RASPSIM_INHERIT_EXCEPTION(RaspsimSSEException);
 
 class RegisterFileRef;
 
-// raspsim is a register/memory-level simulator: an int 0x80 signals the guest is
-// done; any other syscall is unsupported and surfaces as an exception.
+// Configurable dispatcher for the Python binding. By default this is a
+// register/memory-level simulator: an int 0x80 signals the guest is done and any
+// other syscall is unsupported (surfaced as an exception). Optionally it can:
+//   * enable the portable Linux "malloc/free" heap (brk + anonymous
+//     mmap/munmap/mremap) when `enable_heap` is set, and
+//   * route guest read/write on configured fds to Python file-like objects
+//     (e.g. io.BytesIO) instead of any host fd.
+// Host I/O is never used: stdin/stdout/stderr map to caller-supplied Python
+// objects only.
 class PyHost : public x86sim::HostCallbacks {
 public:
-  x86sim::SyscallResult syscall(x86sim::Machine&, x86sim::CpuState&, x86sim::AddressSpace&,
+  // The portable heap handlers are constructed fresh per PyHost (hence per
+  // PyMachine) so SysMmap::next_mapping_address resets for each Machine. The pid
+  // is unique per PyHost so the static brk_states map in the support library
+  // never reuses heap state across successive Machine() instances.
+  PyHost() : pid(next_pid()) {}
+
+  x86sim::SyscallResult syscall(x86sim::Machine& machine, x86sim::CpuState& ctx, x86sim::AddressSpace& space,
                                 x86sim::SyscallKind kind) override {
     using x86sim::StopReason;
+    namespace abi = x86sim::linux_syscalls::abi;
+
+    // int 0x80 stays the guest-exit sentinel: existing README examples rely on
+    // `mov rax, -1; int 0x80` to stop the simulator.
     if (kind == x86sim::SyscallKind::int80)
-      return {.reason = StopReason::guest_exit, .continue_execution = false, .message = {}};
-    return {.reason = StopReason::unsupported_syscall, .continue_execution = false, .message = "Syscall not supported"};
+      return guest_exit();
+
+    // The portable handlers (and the ABI helpers) only decode the 64-bit
+    // `syscall` instruction; anything else is unsupported.
+    if (kind != x86sim::SyscallKind::syscall64)
+      return unsupported();
+
+    const word_t n = abi::syscall_number(ctx);
+
+    if (n == abi::exit || n == abi::exit_group)
+      return guest_exit();
+    if (n == abi::read)
+      return do_read(ctx, space);
+    if (n == abi::write)
+      return do_write(ctx, space);
+
+    // brk/mmap/munmap/mremap: opt-in Linux heap. The handlers self-decode the
+    // syscall number and return std::nullopt for anything they do not handle.
+    if (enable_heap) {
+      if (auto r = sys_brk.try_syscall(machine, pid, ctx, space, kind))
+        return *r;
+      if (auto r = sys_mmap.try_syscall(machine, pid, ctx, space, kind))
+        return *r;
+      if (auto r = sys_munmap.try_syscall(machine, pid, ctx, space, kind))
+        return *r;
+      if (auto r = sys_mremap.try_syscall(machine, pid, ctx, space, kind))
+        return *r;
+    }
+
+    return unsupported();
   }
 
   x86sim::CpuidResult cpuid(x86sim::Machine&, x86sim::CpuState&, x86sim::AddressSpace&,
                             x86sim::CpuidRequest request) noexcept override {
     return x86sim::defaults::default_cpuid(request);
   }
+
+  // If an I/O callback raised during the last run, re-raise the original Python
+  // exception (clearing the stash). Called by PyMachine::run after run() returns.
+  void rethrow_pending_error() {
+    if (pending_error)
+      std::rethrow_exception(std::exchange(pending_error, nullptr));
+  }
+
+  bool enable_heap = false;
+  // Guest fd -> Python file-like object. Seeded with 0/1/2 in the ctor; an
+  // absent (or None) entry means that fd is unconfigured.
+  std::unordered_map<int, py::object> fds;
+
+private:
+  // Cap a single read/write transfer so a bogus guest count cannot trigger a
+  // huge allocation; oversized requests become a (legal) short transfer. This
+  // mirrors the spirit of the bounds checks in the syscall support library.
+  static constexpr word_t kMaxTransfer = word_t{1} << 31; // 2 GiB
+
+  static x86sim::SyscallResult guest_exit() {
+    return {.reason = x86sim::StopReason::guest_exit, .continue_execution = false, .message = {}};
+  }
+
+  static x86sim::SyscallResult unsupported() {
+    return {.reason = x86sim::StopReason::unsupported_syscall,
+            .continue_execution = false,
+            .message = "Syscall not supported"};
+  }
+
+  static x86sim::linux_syscalls::ProcessId next_pid() {
+    static std::atomic<x86sim::linux_syscalls::ProcessId> counter{x86sim::linux_syscalls::initial_process_id};
+    return counter.fetch_add(1, std::memory_order_relaxed);
+  }
+
+  // Stop the run and stash a Python exception raised by an I/O callback so
+  // PyMachine::run can re-raise the original Python exception to the caller
+  // instead of letting it unwind through the simulator core mid-syscall.
+  x86sim::SyscallResult py_error_stop() {
+    pending_error = std::current_exception();
+    return {x86sim::StopReason::host_request, false, "Python I/O callback raised an exception"};
+  }
+
+  // The GIL is held throughout Machine::run (pybind11 holds it by default and we
+  // never release it), so invoking the Python .read/.write callbacks below is
+  // safe without any additional acquire. A callback that raises is captured by
+  // py_error_stop() and re-raised after run() returns.
+  x86sim::SyscallResult do_read(x86sim::CpuState& ctx, x86sim::AddressSpace& space) {
+    namespace abi = x86sim::linux_syscalls::abi;
+    const int fd = static_cast<int>(abi::syscall_arg(ctx, 0));
+    auto it = fds.find(fd);
+    if (it == fds.end() || it->second.is_none() || !py::hasattr(it->second, "read"))
+      return unsupported();
+
+    const address_t buffer = abi::syscall_arg(ctx, 1);
+    const word_t count = std::min<word_t>(abi::syscall_arg(ctx, 2), kMaxTransfer);
+
+    std::string data;
+    try {
+      py::object result = it->second.attr("read")(static_cast<std::size_t>(count));
+      // Accept any bytes-like return (bytes/bytearray/memoryview, ...).
+      PyObject* raw_bytes = PyBytes_FromObject(result.ptr());
+      if (!raw_bytes)
+        throw py::error_already_set();
+      data = static_cast<std::string>(py::reinterpret_steal<py::bytes>(raw_bytes));
+    } catch (py::error_already_set&) {
+      return py_error_stop();
+    }
+
+    // Honour the configured count (handles short reads and over-long returns).
+    const std::size_t n = std::min<std::size_t>(data.size(), static_cast<std::size_t>(count));
+    if (n > 0) {
+      auto bytes = std::as_bytes(std::span(data.data(), n));
+      if (auto r = space.write(buffer, bytes); !r)
+        return unsupported();
+    }
+    return abi::return_value(ctx, static_cast<std::int64_t>(n));
+  }
+
+  x86sim::SyscallResult do_write(x86sim::CpuState& ctx, x86sim::AddressSpace& space) {
+    namespace abi = x86sim::linux_syscalls::abi;
+    const int fd = static_cast<int>(abi::syscall_arg(ctx, 0));
+    auto it = fds.find(fd);
+    if (it == fds.end() || it->second.is_none() || !py::hasattr(it->second, "write"))
+      return unsupported();
+
+    const address_t buffer = abi::syscall_arg(ctx, 1);
+    const word_t count = std::min<word_t>(abi::syscall_arg(ctx, 2), kMaxTransfer);
+
+    // Stream the guest buffer to the Python object in bounded chunks: this caps
+    // our own allocation regardless of `count`, and honours short writes (a
+    // file-like .write() may consume fewer bytes than offered) so the value
+    // returned to the guest matches the write(2) ABI.
+    py::object writer = it->second.attr("write");
+    std::array<std::byte, kIoChunk> chunk{};
+    word_t total = 0;
+    try {
+      while (total < count) {
+        const std::size_t want = static_cast<std::size_t>(std::min<word_t>(count - total, chunk.size()));
+        if (auto r = space.read(buffer + total, std::span(chunk.data(), want)); !r)
+          return total == 0 ? unsupported() : abi::return_value(ctx, static_cast<std::int64_t>(total));
+
+        py::object ret = writer(py::bytes(reinterpret_cast<const char*>(chunk.data()), want));
+        // A binary stream returns the number of bytes consumed; None means "all"
+        // (matching e.g. text/raw stream conventions). Clamp defensively.
+        std::size_t written = want;
+        if (py::isinstance<py::int_>(ret)) {
+          const auto reported = ret.cast<long long>();
+          written = reported <= 0 ? 0 : std::min<std::size_t>(static_cast<std::size_t>(reported), want);
+        }
+        total += static_cast<word_t>(written);
+        if (written < want) // short write: stop and report the partial count
+          break;
+      }
+    } catch (py::error_already_set&) {
+      return total == 0 ? py_error_stop() : abi::return_value(ctx, static_cast<std::int64_t>(total));
+    }
+    return abi::return_value(ctx, static_cast<std::int64_t>(total));
+  }
+
+  // Per-chunk transfer size for streamed writes; bounds our own buffering.
+  static constexpr std::size_t kIoChunk = 64 * 1024;
+
+  std::exception_ptr pending_error;
+  x86sim::linux_syscalls::ProcessId pid;
+  x86sim::linux_syscalls::SysBrk sys_brk;
+  x86sim::linux_syscalls::SysMmap sys_mmap;
+  x86sim::linux_syscalls::SysMunmap sys_munmap;
+  x86sim::linux_syscalls::SysMremap sys_mremap;
 };
 
 class PyMachine {
 public:
-  PyMachine(const char* logfile, bool sse, bool x87, bool perfect_cache, bool static_branchpred) {
+  PyMachine(const char* logfile, bool sse, bool x87, bool perfect_cache, bool static_branchpred, bool heap,
+            py::object stdin_obj, py::object stdout_obj, py::object stdout_err) {
     if (!lock.try_lock())
       throw py::value_error("Only one instance of Raspsim can be used at a time");
+
+    host.enable_heap = heap;
+    // Map guest fds 0/1/2 to the supplied Python file-like objects (None leaves
+    // the fd unconfigured, so the guest sees an unsupported syscall on it).
+    map_stream(0, std::move(stdin_obj), "read", "stdin");
+    map_stream(1, std::move(stdout_obj), "write", "stdout");
+    map_stream(2, std::move(stdout_err), "write", "stderr");
 
     x86sim::Options options;
     options.sse = sse;
@@ -197,6 +382,17 @@ public:
   x86sim::AddressSpace address_space;
   std::unique_ptr<x86sim::Machine> machine;
   static std::mutex lock;
+
+private:
+  // Validate that a supplied stream exposes the attribute the guest will need,
+  // then register it for the given fd. A None object is left unconfigured.
+  void map_stream(int fd, py::object obj, const char* attr, const char* name) {
+    if (obj.is_none())
+      return;
+    if (!py::hasattr(obj, attr))
+      throw py::value_error(std::format("{} must be a file-like object exposing a .{}() method", name, attr));
+    host.fds[fd] = std::move(obj);
+  }
 };
 
 std::mutex PyMachine::lock;
@@ -249,6 +445,10 @@ void PyMachine::run(unsigned long long ninstr) {
     run_options.instruction_limit = ninstr;
 
   x86sim::RunResult result = machine->run(cpu_state, address_space, run_options);
+
+  // If a Python I/O callback raised, surface the original Python exception
+  // rather than the generic host_request stop below.
+  host.rethrow_pending_error();
 
   using x86sim::StopReason;
   switch (result.reason) {
@@ -606,8 +806,13 @@ PYBIND11_MODULE(bindings, m) {
       .REGXMM(13);
 
   py::class_<PyMachine>(m, "Machine", "A class to interact with the simulator")
-      .def(py::init<const char*, bool, bool, bool, bool>(), "logfile"_a = "/dev/null", "sse"_a = true, "x87"_a = true,
-           "perfect_cache"_a = false, "static_branchpred"_a = false, "Create a new Machine instance")
+      .def(py::init<const char*, bool, bool, bool, bool, bool, py::object, py::object, py::object>(),
+           "logfile"_a = "/dev/null", "sse"_a = true, "x87"_a = true, "perfect_cache"_a = false,
+           "static_branchpred"_a = false, "heap"_a = false, "stdin"_a = py::none(), "stdout"_a = py::none(),
+           "stderr"_a = py::none(),
+           "Create a new Machine instance.\n\nSet heap=True to enable the Linux malloc/free heap "
+           "(brk + anonymous mmap/munmap/mremap). Pass file-like objects for stdin/stdout/stderr to "
+           "route guest read/write on fds 0/1/2 to Python (e.g. io.BytesIO); host fds are never used.")
       .def_property_readonly("registers", &PyMachine::getRegisters, "Get the register file")
       .def("run", &PyMachine::run, "Run the simulator for a number of instructions",
            "ninstr"_a = static_cast<unsigned long long>(-1))

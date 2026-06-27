@@ -5,6 +5,7 @@
 
 #include <array>
 #include <concepts>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -37,90 +38,26 @@ inline constexpr address_t default_brk_base = 0x600000000000ULL;
 
 } // namespace detail
 
+// Public, minimal ABI helpers for callers that drive the syscall instruction
+// themselves (e.g. routing read/write/exit to host-supplied streams) without
+// pulling in the internal detail surface. Thin forwarders over detail::.
+namespace abi {
+
+[[nodiscard]] word_t syscall_number(const RegisterFile& context) noexcept;
+[[nodiscard]] word_t syscall_arg(const CpuState& context, std::size_t index) noexcept;
+[[nodiscard]] SyscallResult return_value(CpuState& context, std::int64_t value) noexcept;
+
+inline constexpr word_t read = 0;
+inline constexpr word_t write = 1;
+inline constexpr word_t exit = 60;
+inline constexpr word_t exit_group = 231;
+
+} // namespace abi
+
 template<typename Handler>
 concept SyscallHandler = requires(Handler& handler, Machine& machine, ProcessId pid, CpuState& context,
                                   AddressSpace& space, SyscallKind kind) {
   { handler.try_syscall(machine, pid, context, space, kind) } -> std::same_as<std::optional<SyscallResult>>;
-};
-
-struct SysRead {
-  [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, ProcessId, CpuState&, AddressSpace&,
-                                                         SyscallKind) noexcept;
-};
-
-struct SysReadlink {
-  [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, ProcessId, CpuState&, AddressSpace&,
-                                                         SyscallKind) noexcept;
-};
-
-struct SysWrite {
-  [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, ProcessId, CpuState&, AddressSpace&,
-                                                         SyscallKind) noexcept;
-};
-
-struct SysPreadPwrite {
-  [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, ProcessId, CpuState&, AddressSpace&,
-                                                         SyscallKind) noexcept;
-};
-
-struct SysOpen {
-  [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, ProcessId, CpuState&, AddressSpace&,
-                                                         SyscallKind) noexcept;
-};
-
-struct SysClose {
-  [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, ProcessId, CpuState&, AddressSpace&,
-                                                         SyscallKind) noexcept;
-};
-
-struct SysPipe {
-  [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, ProcessId, CpuState&, AddressSpace&,
-                                                         SyscallKind) noexcept;
-};
-
-struct SysFstat {
-  [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, ProcessId, CpuState&, AddressSpace&,
-                                                         SyscallKind) noexcept;
-};
-
-struct SysStat {
-  [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, ProcessId, CpuState&, AddressSpace&,
-                                                         SyscallKind) noexcept;
-};
-
-struct SysFileSystem {
-  [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, ProcessId, CpuState&, AddressSpace&,
-                                                         SyscallKind) noexcept;
-};
-
-struct SysLseek {
-  [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, ProcessId, CpuState&, AddressSpace&,
-                                                         SyscallKind) noexcept;
-};
-
-struct SysIoctl {
-  [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, ProcessId, CpuState&, AddressSpace&,
-                                                         SyscallKind) noexcept;
-};
-
-struct SysFcntl {
-  [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, ProcessId, CpuState&, AddressSpace&,
-                                                         SyscallKind) noexcept;
-};
-
-struct SysSocket {
-  [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, ProcessId, CpuState&, AddressSpace&,
-                                                         SyscallKind) noexcept;
-};
-
-struct SysConnect {
-  [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, ProcessId, CpuState&, AddressSpace&,
-                                                         SyscallKind) noexcept;
-};
-
-struct SysSelect {
-  [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, ProcessId, CpuState&, AddressSpace&,
-                                                         SyscallKind) noexcept;
 };
 
 struct SysProcess {
@@ -174,11 +111,6 @@ struct SysUname {
 };
 
 struct SysGetcwd {
-  [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, ProcessId, CpuState&, AddressSpace&,
-                                                         SyscallKind) noexcept;
-};
-
-struct SysTime {
   [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, ProcessId, CpuState&, AddressSpace&,
                                                          SyscallKind) noexcept;
 };
@@ -275,11 +207,6 @@ struct SysMremap {
                                                          SyscallKind) noexcept;
 
   address_t next_mapping_address;
-};
-
-struct SysGetdents64 {
-  [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, ProcessId, CpuState&, AddressSpace&,
-                                                         SyscallKind) noexcept;
 };
 
 template<typename... Handlers>

@@ -1,4 +1,4 @@
-#include "x86sim-support/syscall-linux.hpp"
+#include "x86sim-support/syscall-linux-posix.hpp"
 #include "x86sim/addrspace.hpp"
 #include "x86sim/registerfile.hpp"
 #include "x86sim/x86sim.hpp"

@@ -39,10 +39,12 @@ build-dir = "build-wheel/{wheel_tag}"
 # (install(TARGETS bindings ... DESTINATION x86sim)).
 wheel.packages = ["x86sim"]
 
-# Build only the Python extension against the portable core; the Linux-only
-# support library, simulators, and CTest suite are unnecessary here.
+# Build the Python extension against the portable core plus the portable support
+# library (x86sim::defaults) it now links for cpuid/heap/ABI helpers. The
+# host-POSIX library (x86sim::posix), the simulators, and the CTest suite are
+# unnecessary here, so the Linux tools stay off and the wheel stays portable.
 cmake.define.X86SIM_BUILD_PYTHON = "ON"
-cmake.define.X86SIM_BUILD_DEFAULTS = "OFF"
+cmake.define.X86SIM_BUILD_DEFAULTS = "ON"
 cmake.define.X86SIM_BUILD_RASPSIM = "OFF"
 cmake.define.X86SIM_BUILD_LINUX = "OFF"
 cmake.define.X86SIM_BUILD_TESTS = "OFF"

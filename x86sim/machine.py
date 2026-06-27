@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import IO, Any, Literal
 from pathlib import Path
 
 from .bindings import Machine as _Machine, RaspsimException
@@ -8,8 +8,29 @@ from .elf import ELF
 
 
 class Machine(_Machine):
-    def __init__(self):
-        super().__init__()
+    def __init__(
+        self,
+        *,
+        heap: bool = False,
+        stdin: IO[bytes] | Any | None = None,
+        stdout: IO[bytes] | Any | None = None,
+        stderr: IO[bytes] | Any | None = None,
+    ):
+        """
+        Create a new Machine instance.
+
+        Args:
+            heap: Enable the Linux malloc/free heap (brk + anonymous
+                mmap/munmap/mremap) for the guest. Off by default.
+            stdin: A file-like object exposing ``.read(n)`` that the guest's
+                ``read(0, ...)`` is routed to (e.g. ``io.BytesIO``). Host fds are
+                never used; ``None`` leaves fd 0 unconfigured.
+            stdout: A file-like object exposing ``.write(bytes)`` that the
+                guest's ``write(1, ...)`` is routed to. ``None`` leaves fd 1
+                unconfigured.
+            stderr: As ``stdout`` but for the guest's ``write(2, ...)``.
+        """
+        super().__init__(heap=heap, stdin=stdin, stdout=stdout, stderr=stderr)
         self._current_elf: ELF | None = None
 
     def load_elf(self, elf: ELF, abi: Literal["sysv"] = "sysv") -> None:
