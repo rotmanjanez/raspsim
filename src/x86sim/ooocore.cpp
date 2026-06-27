@@ -11,13 +11,15 @@
 #include <format>
 #include <print>
 #include <cstdio>
+#include <algorithm>
+#include <stdexcept>
 #include <utility>
 #include "globals.h"
 #include "ptlsim.h"
 #include "branchpred.h"
 #include "logic.h"
 #include "dcache.h"
-#include "x86sim/logging.h"
+#include "x86sim/logging.hpp"
 
 #define INSIDE_OOOCORE
 #define DECLARE_STRUCTURES
@@ -846,7 +848,10 @@ bool ThreadContext::handle_barrier() {
   logging::println(logging::DEBUG, "Before assist:");
   logging::println(logging::DEBUG, "{}", ctx);
 
+  requested_switch_to_native = false;
   assist(ctx);
+  const bool switch_to_native = requested_switch_to_native;
+  requested_switch_to_native = false;
 
   logging::println(logging::DEBUG, "Done with assist");
   logging::println(logging::DEBUG, "New state:");
@@ -855,7 +860,7 @@ bool ThreadContext::handle_barrier() {
   // Flush again, but restart at possibly modified rip
   flush_pipeline();
 
-  if (requested_switch_to_native) {
+  if (switch_to_native) {
     logging::println(logging::INFO, "PTL call requested switch to native mode at rip {}",
                      (void*)(Waddr)ctx.commitarf[REG_rip]);
     return false;
@@ -1687,12 +1692,12 @@ OutOfOrderMachine::OutOfOrderMachine(Machine& machine, Options config) : Machine
   init_luts();
 }
 
-RegisterFile& OutOfOrderMachine::register_file(std::size_t core_index) noexcept {
-  return cores[0]->threads[core_index]->ctx;
+Context& OutOfOrderMachine::cpu_context() {
+  return cores[0]->threads[0]->ctx;
 }
 
-const RegisterFile& OutOfOrderMachine::register_file(std::size_t core_index) const noexcept {
-  return cores[0]->threads[core_index]->ctx;
+const Context& OutOfOrderMachine::cpu_context() const {
+  return cores[0]->threads[0]->ctx;
 }
 
 //
@@ -1711,6 +1716,16 @@ int OutOfOrderMachine::run() {
     logging::flush();
 
     logenable = 1;
+  }
+
+  // Bind the caller's state/space into the single thread context. The pipeline
+  // flush below seeds the rename tables from ctx.commitarf, so this must happen
+  // first.
+  {
+    Context& ctx = cores[0]->threads[0]->ctx;
+    ctx.machine = &owner;
+    ctx.address_space = address_space;
+    ctx.load_cpu_state(*state);
   }
 
   cores[0]->reset();
@@ -1797,6 +1812,9 @@ int OutOfOrderMachine::run() {
 
   // Flush everything to remove any remaining refs to basic blocks
   flush_all_pipelines();
+
+  // Write the committed architectural state back to the caller's CpuState.
+  *state = cores[0]->threads[0]->ctx.to_cpu_state();
 
   return exiting;
 }

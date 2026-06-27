@@ -12,19 +12,20 @@
 #include "ptlsim.h"
 
 #include <memory>
+#include <vector>
 
 namespace x86sim {
 
 struct SequentialCore;
 
 struct SequentialMachine : public MachineImpl {
-  std::unique_ptr<SequentialCore> cores[MAX_CONTEXTS];
+  std::unique_ptr<SequentialCore> core;
 
   SequentialMachine(Machine& machine, Options config);
   ~SequentialMachine() override;
   std::string_view name() const override;
-  RegisterFile& register_file(std::size_t core_index) noexcept override;
-  const RegisterFile& register_file(std::size_t core_index) const noexcept override;
+  Context& cpu_context() override;
+  const Context& cpu_context() const override;
 
   //
   // Run the processor model, until a stopping point

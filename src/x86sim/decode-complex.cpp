@@ -6,7 +6,7 @@
 //
 
 #include "decode.h"
-#include "x86sim/logging.h"
+#include "x86sim/logging.hpp"
 
 namespace x86sim {
 
@@ -124,8 +124,7 @@ void assist_ldmxcsr(Context& ctx) {
   //
   W32 mxcsr = (W32)ctx.commitarf[REG_ar1];
 
-  // Top bit of mxcsr archreg doubles as direction flag and other misc flags: preserve it
-  ctx.mxcsr = (ctx.mxcsr & 0xffffffff00000000ULL) | mxcsr;
+  ctx.mxcsr = mxcsr;
 
   //
   // Technically all FP uops should update the sticky exception bits in the mxcsr
@@ -513,7 +512,8 @@ bool TraceDecoder::decode_complex() {
       MakeInvalid();
 
     int rdreg = (rd.type == OPTYPE_MEM) ? REG_temp0 : arch_pseudo_reg_to_arch_reg[rd.reg.reg];
-    TransOp ldp(OP_ld, rdreg, REG_ctx, REG_imm, REG_zero, 1, offsetof_(Context, seg[modrm.reg].selector));
+    TransOp ldp(OP_ld, rdreg, REG_ctx, REG_imm, REG_zero, 1,
+                offsetof_(Context, segment_selectors) + modrm.reg * sizeof(std::uint16_t));
     ldp.internal = 1;
     put(ldp);
 

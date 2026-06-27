@@ -6,7 +6,7 @@
 //
 
 #include "decode.h"
-#include "x86sim/logging.h"
+#include "x86sim/logging.hpp"
 
 #include <cmath>
 #include <numbers>
@@ -41,7 +41,7 @@ void assist_x87_fist(Context& ctx) {
   W64 st0 = ctx.fpstack[tos >> 3];
   SSEType st0u(st0);
 
-  const double r = x87_round(st0u.d, ctx.fpcw.rc);
+  const double r = x87_round(st0u.d, X87ControlWord(static_cast<W16>(ctx.fpcw)).rc);
   st0u.w64 = (r >= -0x1p63 && r < 0x1p63) ? W64(W64s(r)) : (W64(1) << 63); // out of range/NaN: integer indefinite
 
   PageFaultErrorCode pfec;
@@ -170,7 +170,7 @@ make_unary_x87_func(f2xm1, std::exp2(ra.d) - 1);
 void assist_x87_frndint(Context& ctx) {
   W64& r = ctx.fpstack[ctx.commitarf[REG_fptos] >> 3];
   SSEType ra(r);
-  ra.d = x87_round(ra.d, ctx.fpcw.rc);
+  ra.d = x87_round(ra.d, X87ControlWord(static_cast<W16>(ctx.fpcw)).rc);
   r = ra.w64;
 
   X87StatusWord* sw = (X87StatusWord*)&ctx.commitarf[REG_fpsw];
@@ -283,7 +283,7 @@ void assist_x87_fld80(Context& ctx) {
   // Push on stack
   W64& tos = ctx.commitarf[REG_fptos];
   tos = (tos - 8) & FP_STACK_MASK;
-  ctx.fpstack[tos >> 3] = x87_fp_80bit_to_64bit(&data, ctx.fpcw.rc);
+  ctx.fpstack[tos >> 3] = x87_fp_80bit_to_64bit(&data, X87ControlWord(static_cast<W16>(ctx.fpcw)).rc);
   setbit(ctx.commitarf[REG_fptags], tos);
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
 }

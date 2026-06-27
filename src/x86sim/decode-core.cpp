@@ -10,8 +10,8 @@
 #include "ptlsim.h"
 #include "decode.h"
 #include "stats.h"
-#include "addrspace.h"
-#include "x86sim/logging.h"
+#include "x86sim/addrspace.hpp"
+#include "x86sim/logging.hpp"
 
 
 namespace x86sim {
@@ -953,7 +953,7 @@ int TraceDecoder::bias_by_segreg(int basereg) {
                                     : (prefixes & PFX_ES) ? SegmentRegister::es
                                                           : SegmentRegister::cs;
 
-    int varoffs = offsetof_(Context, seg[segment_register_index(segment)].base);
+    int varoffs = offsetof_(Context, segment_bases) + segment_register_index(segment) * sizeof(address_t);
 
     TransOp ldp(OP_ld, REG_temp6, REG_ctx, REG_imm, REG_zero, 3, varoffs);
     ldp.internal = 1;
@@ -1772,7 +1772,7 @@ void assist_exec_page_fault(Context& ctx) {
   Waddr faultaddr = ctx.commitarf[REG_ar1];
   PageFaultErrorCode pfec = ctx.commitarf[REG_ar2];
 
-  bool page_now_valid = ctx.machine->address_space().check((byte*)faultaddr, Protection::execute);
+  bool page_now_valid = ctx.address_space->check(faultaddr, Protection::execute);
   if unlikely (page_now_valid) {
     logging::println(
         logging::WARNING,
@@ -2117,7 +2117,7 @@ std::string format_flags(W64 flags) {
 // references to some of the basic blocks.
 //
 BasicBlock* BasicBlockCache::translate(Context& ctx, const RIPVirtPhys& rvp) {
-  AddressSpace& asp = ctx.machine->address_space();
+  AddressSpace& asp = *ctx.address_space;
   Options& config = ctx.machine_impl->config;
 
   if unlikely ((rvp.rip == config.log.start_log_at_rip) && (rvp.rip != 0xffffffffffffffffULL)) {

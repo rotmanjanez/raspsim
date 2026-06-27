@@ -1,27 +1,24 @@
 #ifndef RASPSIM_RASPSIM_HPP
 #define RASPSIM_RASPSIM_HPP
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
-#include <expected>
 #include <filesystem>
 #include <format>
 #include <limits>
 #include <memory>
 #include <optional>
-#include <span>
 #include <string>
-#include <vector>
 
+#include "x86sim/addrspace.hpp"
 #include "x86sim/registerfile.hpp"
 
 namespace x86sim {
 
-class AddressSpace;
 struct MachineImpl;
+struct CpuState;
 
-using address_t = std::uint64_t;
-enum class Protection : std::uint8_t { none = 0, read = 1, write = 2, execute = 4 };
 enum class CoreModel { out_of_order, sequential };
 enum class SegmentRegister : std::uint8_t { es = 0, cs = 1, ss = 2, ds = 3, fs = 4, gs = 5 };
 
@@ -33,20 +30,6 @@ inline constexpr std::size_t segment_register_count = 6;
 
 enum class SyscallKind { int80, syscall64, sysenter };
 enum class StopReason { guest_exit, instruction_limit, x86_exception, host_request, unsupported_syscall };
-enum class MemoryError { unaligned_address, zero_size, unmapped_address, out_of_memory, mapping_failed };
-
-[[nodiscard]] constexpr Protection operator|(Protection lhs, Protection rhs) noexcept {
-  return static_cast<Protection>(static_cast<std::uint8_t>(lhs) | static_cast<std::uint8_t>(rhs));
-}
-
-[[nodiscard]] constexpr Protection operator&(Protection lhs, Protection rhs) noexcept {
-  return static_cast<Protection>(static_cast<std::uint8_t>(lhs) & static_cast<std::uint8_t>(rhs));
-}
-
-[[nodiscard]] constexpr bool has_protection(Protection value, Protection flag) noexcept {
-  return (static_cast<std::uint8_t>(value) & static_cast<std::uint8_t>(flag)) == static_cast<std::uint8_t>(flag);
-}
-
 
 struct CpuidRequest {
   std::uint32_t function = 0;
@@ -71,8 +54,8 @@ class Machine;
 class HostCallbacks {
 public:
   virtual ~HostCallbacks() = default;
-  virtual SyscallResult syscall(Machine&, RegisterFile&, SyscallKind) = 0;
-  virtual CpuidResult cpuid(Machine&, RegisterFile&, CpuidRequest) noexcept = 0;
+  virtual SyscallResult syscall(Machine&, CpuState&, AddressSpace&, SyscallKind) = 0;
+  virtual CpuidResult cpuid(Machine&, CpuState&, AddressSpace&, CpuidRequest) noexcept = 0;
 };
 
 struct LogOptions {
@@ -157,66 +140,50 @@ struct RunResult {
   std::string message;
 };
 
+// The complete externally-visible architectural state of a single CPU, and the
+// single definition of that state: the simulator's internal context derives
+// from it, so loading/storing it across a run is a plain slice/assign rather
+// than a field-by-field copy. Inherits RegisterFile, so the general-purpose/SSE
+// register accessors (operator[]) are available directly. The caller owns one
+// or more of these (one per process/thread) and hands them to Machine::run.
+struct CpuState : RegisterFile {
+  std::array<address_t, segment_register_count> segment_bases{};
+  std::array<std::uint16_t, segment_register_count> segment_selectors{};
+  address_t swapgs_base = 0;
+  std::array<word_t, 8> fpstack{};
+  word_t fpcw = 0;
+  std::uint32_t mxcsr = 0;
+  bool use32 = true;
+  bool use64 = true;
+  address_t virt_addr_mask = std::numeric_limits<address_t>::max();
+  std::uint32_t internal_eflags = 0;
+};
 
 class Machine {
 public:
-  static constexpr std::uint64_t kPageSize = 4096;
-
   explicit Machine(HostCallbacks&, Options = {});
   ~Machine();
 
-  [[nodiscard]] std::expected<void, MemoryError> map(address_t start, std::uint64_t size, Protection) noexcept;
-  void unmap(address_t start, std::uint64_t size) noexcept;
-  [[nodiscard]] std::expected<void, MemoryError> read_memory_into(address_t start,
-                                                                  std::span<std::byte> out) const noexcept;
-  [[nodiscard]] std::expected<void, MemoryError> write_memory(address_t start, std::span<const std::byte>) noexcept;
-
-  [[nodiscard]] RunResult run(RunOptions = {});
+  // Execute `state` against `space` until a stop is reached, mutating `state`
+  // in place and returning why execution stopped. The caller owns the CpuState
+  // and AddressSpace and may keep and swap several of them to model multiple
+  // processes/threads on the same Machine.
+  [[nodiscard]] RunResult run(CpuState& state, AddressSpace& space, RunOptions = {});
 
   [[nodiscard]] const Options& options() const noexcept;
   [[nodiscard]] Stats stats() const noexcept;
-  [[nodiscard]] RegisterFile& register_file(std::size_t core_index = 0) noexcept;
-  [[nodiscard]] const RegisterFile& register_file(std::size_t core_index = 0) const noexcept;
-  [[nodiscard]] address_t segment_base(const RegisterFile&, SegmentRegister) const noexcept;
-  void set_segment_base(RegisterFile&, SegmentRegister, address_t) noexcept;
-  [[nodiscard]] AddressSpace& address_space() noexcept;
-  [[nodiscard]] const AddressSpace& address_space() const noexcept;
-  [[nodiscard]] SyscallResult dispatch_syscall(RegisterFile&, SyscallKind);
-  [[nodiscard]] CpuidResult dispatch_cpuid(RegisterFile&, CpuidRequest) noexcept;
-  void set_pending_stop(RunResult);
 
 private:
+  // The core delivers guest syscalls/cpuid to callbacks_ and records the
+  // resulting stop in MachineImpl::pending_stop, so it owns those internals.
+  friend struct MachineImpl;
+
   HostCallbacks& callbacks_;
   Options options_;
-  std::unique_ptr<AddressSpace> address_space_;
   std::unique_ptr<MachineImpl> machine_;
-  std::optional<RunResult> pending_stop_;
 };
 
 } // namespace x86sim
-
-template<>
-struct std::formatter<x86sim::Protection> {
-  constexpr auto parse(std::format_parse_context& ctx) { return ctx.begin(); }
-
-  template<typename FormatContext>
-  auto format(x86sim::Protection protection, FormatContext& ctx) const {
-    const auto bits = static_cast<unsigned>(protection);
-    if ((bits & ~0x7u) != 0)
-      return std::format_to(ctx.out(), "unknown(0x{:02x})", bits);
-    if (protection == x86sim::Protection::none)
-      return std::format_to(ctx.out(), "none");
-
-    auto out = ctx.out();
-    if (x86sim::has_protection(protection, x86sim::Protection::read))
-      out = std::format_to(out, "r");
-    if (x86sim::has_protection(protection, x86sim::Protection::write))
-      out = std::format_to(out, "w");
-    if (x86sim::has_protection(protection, x86sim::Protection::execute))
-      out = std::format_to(out, "x");
-    return out;
-  }
-};
 
 template<>
 struct std::formatter<x86sim::CoreModel> {
@@ -299,29 +266,6 @@ struct std::formatter<x86sim::StopReason> {
       return std::format_to(ctx.out(), "unsupported_syscall");
     }
     return std::format_to(ctx.out(), "unknown({})", static_cast<int>(reason));
-  }
-};
-
-template<>
-struct std::formatter<x86sim::MemoryError> {
-  constexpr auto parse(std::format_parse_context& ctx) { return ctx.begin(); }
-
-  template<typename FormatContext>
-  auto format(x86sim::MemoryError error, FormatContext& ctx) const {
-    using enum x86sim::MemoryError;
-    switch (error) {
-    case unaligned_address:
-      return std::format_to(ctx.out(), "address is not page-aligned");
-    case zero_size:
-      return std::format_to(ctx.out(), "range has zero size");
-    case unmapped_address:
-      return std::format_to(ctx.out(), "address is not mapped");
-    case out_of_memory:
-      return std::format_to(ctx.out(), "out of memory");
-    case mapping_failed:
-      return std::format_to(ctx.out(), "mapping failed");
-    }
-    return std::format_to(ctx.out(), "unknown({})", static_cast<int>(error));
   }
 };
 
@@ -439,12 +383,10 @@ struct std::formatter<x86sim::Machine> {
     const auto& options = machine.options();
     const auto stats = machine.stats();
     return std::format_to(ctx.out(),
-                          "x86sim::Machine(core={}, core_count={}, address_space={}, cycles={}, instructions={}, "
-                          "sse={}, x87={}, perfect_cache={}, static_branch_prediction={}, core0={})",
-                          options.core, options.core_count, static_cast<const void*>(&machine.address_space()),
-                          stats.cycles, stats.instructions, options.sse, options.x87, options.debug.perfect_cache,
-                          options.debug.static_branchpred,
-                          options.core_count == 0 ? x86sim::RegisterFile{} : machine.register_file(0));
+                          "x86sim::Machine(core={}, core_count={}, cycles={}, instructions={}, sse={}, x87={}, "
+                          "perfect_cache={}, static_branch_prediction={})",
+                          options.core, options.core_count, stats.cycles, stats.instructions, options.sse, options.x87,
+                          options.debug.perfect_cache, options.debug.static_branchpred);
   }
 };
 

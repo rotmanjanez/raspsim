@@ -6,6 +6,8 @@
 //
 
 #include <cstdlib>
+#include <algorithm>
+#include <stdexcept>
 #include <utility>
 
 #include "globals.h"
@@ -15,8 +17,8 @@
 #include "dcache.h"
 #include "stats.h"
 #include "ptlhwdef.h"
-#include "addrspace.h"
-#include "x86sim/logging.h"
+#include "x86sim/addrspace.hpp"
+#include "x86sim/logging.hpp"
 
 namespace x86sim {
 
@@ -612,6 +614,7 @@ struct SequentialCore {
   Options& config;
   Context ctx;
   CommitRecord* cmtrec;
+  bool runnable = true;
 
   SequentialCore(SequentialMachine& machine_, int core_id, CommitRecord* cmtrec_ = null)
       : machine(machine_), config(machine_.config), ctx(config, machine_, core_id), cmtrec(cmtrec_) {}
@@ -1005,7 +1008,10 @@ struct SequentialCore {
     logging::println(logging::TRACE, "Before assist:");
     logging::println(logging::TRACE, "{}", ctx);
 
+    requested_switch_to_native = false;
     assist(ctx);
+    const bool switch_to_native = requested_switch_to_native;
+    requested_switch_to_native = false;
 
     logging::println(logging::TRACE, "Done with assist");
     logging::println(logging::TRACE, "New state:");
@@ -1013,7 +1019,7 @@ struct SequentialCore {
 
     reset_fetch(ctx.commitarf[REG_rip]);
     external_to_core_state(ctx);
-    if (requested_switch_to_native) {
+    if (switch_to_native) {
       logging::println("PTL call requested switch to native mode at rip {}", (void*)(Waddr)ctx.commitarf[REG_rip]);
       return false;
     }
@@ -1185,7 +1191,7 @@ struct SequentialCore {
       // store to overwrite its own instruction bytes, but this update only
       // becomes visible after the store has committed.
       //
-      AddressSpace& asp = ctx.machine->address_space();
+      AddressSpace& asp = *ctx.address_space;
       if unlikely (asp.isdirty(rvp.mfnlo) | (asp.isdirty(rvp.mfnhi))) {
         logging::println("Self-modifying code at rip {} detected: mfn was dirty (invalidate and retry)", rvp);
         machine.bbcache->invalidate_page(asp, rvp.mfnlo, INVALIDATE_REASON_SMC);
@@ -1481,25 +1487,15 @@ std::string_view SequentialMachine::name() const {
 
 SequentialMachine::~SequentialMachine() = default;
 
-SequentialMachine::SequentialMachine(Machine& machine, Options config) : MachineImpl(machine, std::move(config)) {
-  foreach (i, this->config.core_count) {
-    cores[i] = std::make_unique<SequentialCore>(*this, i);
-    //
-    // Note: in a real cycle accurate model, config may
-    // specify various ways of slicing contextcount up
-    // into threads, cores and sockets; the appropriate
-    // interconnect and cache hierarchy parameters may
-    // be specified here.
-    //
-  }
+SequentialMachine::SequentialMachine(Machine& machine, Options config)
+    : MachineImpl(machine, std::move(config)), core(std::make_unique<SequentialCore>(*this, 0)) {}
+
+Context& SequentialMachine::cpu_context() {
+  return core->ctx;
 }
 
-RegisterFile& SequentialMachine::register_file(std::size_t core_index) noexcept {
-  return cores[core_index]->ctx;
-}
-
-const RegisterFile& SequentialMachine::register_file(std::size_t core_index) const noexcept {
-  return cores[core_index]->ctx;
+const Context& SequentialMachine::cpu_context() const {
+  return core->ctx;
 }
 
 void SequentialMachine::flush_tlb(Context& ctx) {}
@@ -1517,15 +1513,16 @@ int SequentialMachine::run() {
     eventlog.init(config.log.event_log_ring_buffer_size);
   }
 
-  foreach (i, contextcount) {
-    SequentialCore& core = *cores[i];
-    Context& ctx = core.ctx;
+  SequentialCore& seq = *core;
+  Context& ctx = seq.ctx;
+  ctx.machine = &owner;
+  ctx.address_space = address_space;
+  ctx.load_cpu_state(*state);
+  seq.runnable = true;
+  seq.external_to_core_state(ctx);
 
-    core.external_to_core_state(ctx);
-
-    logging::println("VCPU {} initial state:", i);
-    logging::println("{}", ctx);
-  }
+  logging::println("Initial state:");
+  logging::println("{}", ctx);
 
   bool exiting = false;
 
@@ -1537,12 +1534,12 @@ int SequentialMachine::run() {
       logenable = 1;
 
     int running_thread_count = 0;
-    foreach (i, contextcount) {
-      SequentialCore& core = *cores[i];
-
-      exiting |= core.execute();
+    if (seq.runnable) {
+      running_thread_count++;
+      exiting |= seq.execute();
     }
 
+    exiting |= running_thread_count == 0;
     exiting |= iterations >= config.stop_at_iteration || total_user_insns_committed >= config.stop_at_user_insns;
 
     if unlikely (config.log.event_log_enabled) {
@@ -1561,17 +1558,12 @@ int SequentialMachine::run() {
 
   logging::println(logging::INFO, "Exiting sequential mode at {} commits, {} uops and {} iterations (cycles)",
                    total_user_insns_committed, total_uops_committed, iterations);
-  // logging::println(logging::TRACE, "{}", *this);
 
-  foreach (i, contextcount) {
-    SequentialCore& core = *cores[i];
-    Context& ctx = core.ctx;
+  seq.core_to_external_state(ctx);
+  *state = ctx.to_cpu_state();
 
-    core.core_to_external_state(ctx);
-
-    logging::println(logging::VERBOSE, "Core State at end:");
-    logging::println(logging::VERBOSE, "{}", ctx);
-  }
+  logging::println(logging::VERBOSE, "Core State at end:");
+  logging::println(logging::VERBOSE, "{}", ctx);
 
   return exiting;
 }
@@ -1580,10 +1572,7 @@ void SequentialMachine::dump_state() {
   logging::println("Dumping event log for sequential core:");
   eventlog.print();
 
-  foreach (i, contextcount) {
-    SequentialCore& core = *cores[i];
-    core.print_state();
-  }
+  core->print_state();
 }
 
 void SequentialMachine::update_stats(PTLsimStats& stats) {

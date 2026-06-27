@@ -3,28 +3,57 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <csignal>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <dirent.h>
 #include <fcntl.h>
 #include <filesystem>
+#include <fstream>
 #include <limits>
 #include <netinet/in.h>
 #include <new>
 #include <span>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/un.h>
 #include <time.h>
+#include <unordered_map>
 #include <unistd.h>
 #include <utime.h>
 #include <vector>
 
 namespace x86sim::linux_syscalls {
+
+struct ProcessTable {
+  struct ExitRecord {
+    ProcessId child = invalid_process_id;
+    int status = 0;
+  };
+
+  std::vector<std::unique_ptr<AddressSpace>> address_spaces;
+  std::unordered_map<ProcessId, ProcessId> parent;
+  std::unordered_map<ProcessId, ProcessId> vfork_parent;
+  std::unordered_map<ProcessId, std::vector<ProcessId>> live_children;
+  std::unordered_map<ProcessId, std::vector<ExitRecord>> exited_children;
+
+  struct WaitRequest {
+    std::int64_t requested_pid = -1;
+    address_t status_address = 0;
+  };
+  std::unordered_map<ProcessId, WaitRequest> waiters;
+};
+
+std::shared_ptr<ProcessTable> make_process_table() {
+  return std::make_shared<ProcessTable>();
+}
+
 namespace detail {
 
 constexpr word_t syscall_read = 0;
@@ -47,6 +76,8 @@ constexpr word_t syscall_access = 21;
 constexpr word_t syscall_pipe = 22;
 constexpr word_t syscall_select = 23;
 constexpr word_t syscall_mremap = 25;
+constexpr word_t syscall_dup = 32;
+constexpr word_t syscall_dup2 = 33;
 constexpr word_t syscall_nanosleep = 35;
 constexpr word_t syscall_clone = 56;
 constexpr word_t syscall_fork = 57;
@@ -54,6 +85,8 @@ constexpr word_t syscall_vfork = 58;
 constexpr word_t syscall_execve = 59;
 constexpr word_t syscall_wait4 = 61;
 constexpr word_t syscall_fcntl = 72;
+constexpr word_t syscall_truncate = 76;
+constexpr word_t syscall_ftruncate = 77;
 constexpr word_t syscall_chdir = 80;
 constexpr word_t syscall_fchdir = 81;
 constexpr word_t syscall_rename = 82;
@@ -71,7 +104,7 @@ constexpr word_t syscall_getcwd = 79;
 constexpr word_t syscall_readlink = 89;
 constexpr word_t syscall_chmod = 90;
 constexpr word_t syscall_fchmod = 91;
-constexpr word_t syscall_getrusage = 77;
+constexpr word_t syscall_getrusage = 98;
 constexpr word_t syscall_getuid = 102;
 constexpr word_t syscall_getgid = 104;
 constexpr word_t syscall_geteuid = 107;
@@ -93,14 +126,19 @@ constexpr word_t syscall_readlinkat = 267;
 constexpr word_t syscall_faccessat = 269;
 constexpr word_t syscall_set_robust_list = 273;
 constexpr word_t syscall_prlimit64 = 302;
+constexpr word_t syscall_dup3 = 292;
 constexpr word_t syscall_rseq = 334;
 
+constexpr int linux_enoent = 2;
 constexpr int linux_esrch = 3;
 constexpr int linux_eio = 5;
+constexpr int linux_e2big = 7;
+constexpr int linux_enoexec = 8;
 constexpr int linux_ebadf = 9;
 constexpr int linux_echild = 10;
 constexpr int linux_eagain = 11;
 constexpr int linux_enomem = 12;
+constexpr int linux_eacces = 13;
 constexpr int linux_efault = 14;
 constexpr int linux_enotty = 25;
 constexpr int linux_einval = 22;
@@ -201,13 +239,13 @@ constexpr std::size_t io_chunk_size = 64 * 1024;
   return context[Register::rax];
 }
 
-[[nodiscard]] word_t syscall_arg(const RegisterFile& context, std::size_t index) noexcept {
+[[nodiscard]] word_t syscall_arg(const CpuState& context, std::size_t index) noexcept {
   static constexpr Register registers[] = {Register::rdi, Register::rsi, Register::rdx,
                                            Register::r10, Register::r8,  Register::r9};
   return context[registers[index]];
 }
 
-[[nodiscard]] bool handles(const RegisterFile& context, SyscallKind kind, word_t number) noexcept {
+[[nodiscard]] bool handles(const CpuState& context, SyscallKind kind, word_t number) noexcept {
   return kind == SyscallKind::syscall64 && syscall_number(context) == number;
 }
 
@@ -215,16 +253,16 @@ constexpr std::size_t io_chunk_size = 64 * 1024;
   return {.reason = StopReason::host_request, .continue_execution = true, .message = {}};
 }
 
-[[nodiscard]] SyscallResult return_value(RegisterFile& context, std::int64_t value) {
+[[nodiscard]] SyscallResult return_value(CpuState& context, std::int64_t value) {
   context[Register::rax] = static_cast<word_t>(value);
   return continue_result();
 }
 
-[[nodiscard]] SyscallResult return_error(RegisterFile& context, int error) {
+[[nodiscard]] SyscallResult return_error(CpuState& context, int error) {
   return return_value(context, -static_cast<std::int64_t>(error));
 }
 
-SyscallResult unsupported_syscall(const RegisterFile& context, SyscallKind kind) {
+SyscallResult unsupported_syscall(const CpuState& context, SyscallKind kind) {
   return {.reason = StopReason::unsupported_syscall,
           .continue_execution = false,
           .message = "unsupported Linux syscall " + std::to_string(syscall_number(context)) + " via " +
@@ -427,17 +465,17 @@ SyscallResult unsupported_syscall(const RegisterFile& context, SyscallKind kind)
 }
 
 [[nodiscard]] std::optional<std::uint64_t> page_align_up(std::uint64_t value) noexcept {
-  constexpr std::uint64_t mask = Machine::kPageSize - 1;
+  constexpr std::uint64_t mask = AddressSpace::kPageSize - 1;
   if (value > std::numeric_limits<std::uint64_t>::max() - mask)
     return std::nullopt;
   return (value + mask) & ~mask;
 }
 
 [[nodiscard]] bool page_aligned(std::uint64_t value) noexcept {
-  return (value & (Machine::kPageSize - 1)) == 0;
+  return (value & (AddressSpace::kPageSize - 1)) == 0;
 }
 
-[[nodiscard]] bool range_is_unmapped(Machine& machine, address_t start, word_t length) noexcept {
+[[nodiscard]] bool range_is_unmapped(AddressSpace& space, address_t start, word_t length) noexcept {
   if (length == 0)
     return true;
   if (range_overflows(start, length))
@@ -446,10 +484,10 @@ SyscallResult unsupported_syscall(const RegisterFile& context, SyscallKind kind)
   std::array<std::byte, 1> byte{};
   const address_t end = start + length;
   for (address_t page = start; page < end;) {
-    if (machine.read_memory_into(page, byte))
+    if (space.read(page, byte))
       return false;
 
-    const address_t next_page = (page + Machine::kPageSize) & ~(Machine::kPageSize - 1);
+    const address_t next_page = (page + AddressSpace::kPageSize) & ~(AddressSpace::kPageSize - 1);
     if (next_page <= page)
       return false;
     page = next_page;
@@ -457,20 +495,20 @@ SyscallResult unsupported_syscall(const RegisterFile& context, SyscallKind kind)
   return true;
 }
 
-[[nodiscard]] std::optional<address_t> find_unmapped_range(Machine& machine, address_t& cursor,
+[[nodiscard]] std::optional<address_t> find_unmapped_range(AddressSpace& space, address_t& cursor,
                                                            word_t length) noexcept {
   auto candidate = page_align_up(cursor);
   if (!candidate)
     return std::nullopt;
 
   while (*candidate <= std::numeric_limits<address_t>::max() - length) {
-    if (range_is_unmapped(machine, *candidate, length)) {
+    if (range_is_unmapped(space, *candidate, length)) {
       cursor = *candidate + length;
       return *candidate;
     }
-    if (*candidate > std::numeric_limits<address_t>::max() - Machine::kPageSize)
+    if (*candidate > std::numeric_limits<address_t>::max() - AddressSpace::kPageSize)
       return std::nullopt;
-    *candidate += Machine::kPageSize;
+    *candidate += AddressSpace::kPageSize;
   }
   return std::nullopt;
 }
@@ -489,33 +527,33 @@ SyscallResult unsupported_syscall(const RegisterFile& context, SyscallKind kind)
   return result;
 }
 
-[[nodiscard]] std::optional<int> write_word(Machine& machine, address_t address, word_t value) noexcept {
+[[nodiscard]] std::optional<int> write_word(AddressSpace& space, address_t address, word_t value) noexcept {
   std::array<std::byte, sizeof(word_t)> bytes{};
   for (std::size_t i = 0; i < bytes.size(); ++i)
     bytes[i] = static_cast<std::byte>((value >> (i * 8)) & 0xff);
 
-  auto written = machine.write_memory(address, bytes);
+  auto written = space.write(address, bytes);
   if (!written)
     return memory_error_to_linux(written.error());
   return std::nullopt;
 }
 
-[[nodiscard]] std::optional<int> write_int32(Machine& machine, address_t address, std::int32_t value) noexcept {
+[[nodiscard]] std::optional<int> write_int32(AddressSpace& space, address_t address, std::int32_t value) noexcept {
   std::array<std::byte, sizeof(value)> bytes{};
   const auto raw = static_cast<std::uint32_t>(value);
   for (std::size_t i = 0; i < bytes.size(); ++i)
     bytes[i] = static_cast<std::byte>((raw >> (i * 8)) & 0xff);
 
-  auto written = machine.write_memory(address, bytes);
+  auto written = space.write(address, bytes);
   if (!written)
     return memory_error_to_linux(written.error());
   return std::nullopt;
 }
 
 template<std::size_t Size>
-[[nodiscard]] std::optional<int> read_guest_memory(Machine& machine, address_t address,
+[[nodiscard]] std::optional<int> read_guest_memory(AddressSpace& space, address_t address,
                                                    std::array<std::byte, Size>& out) noexcept {
-  auto read = machine.read_memory_into(address, out);
+  auto read = space.read(address, out);
   if (!read)
     return memory_error_to_linux(read.error());
   return std::nullopt;
@@ -538,19 +576,19 @@ void write_le(std::array<std::byte, Size>& bytes, std::size_t offset, std::uint6
   return {.current = read_le(bytes, 0, 8), .maximum = read_le(bytes, 8, 8)};
 }
 
-[[nodiscard]] std::optional<int> write_rlimit64(Machine& machine, address_t address,
+[[nodiscard]] std::optional<int> write_rlimit64(AddressSpace& space, address_t address,
                                                 SysPrlimit64::Limit limit) noexcept {
   std::array<std::byte, 16> bytes{};
   write_le(bytes, 0, limit.current, 8);
   write_le(bytes, 8, limit.maximum, 8);
 
-  auto written = machine.write_memory(address, bytes);
+  auto written = space.write(address, bytes);
   if (!written)
     return memory_error_to_linux(written.error());
   return std::nullopt;
 }
 
-[[nodiscard]] std::optional<int> write_flock64(Machine& machine, address_t address,
+[[nodiscard]] std::optional<int> write_flock64(AddressSpace& space, address_t address,
                                                const struct flock& host_lock) noexcept {
   std::array<std::byte, 32> bytes{};
   word_t type = linux_f_unlck;
@@ -574,13 +612,13 @@ void write_le(std::array<std::byte, Size>& bytes, std::size_t offset, std::uint6
   write_le(bytes, 16, static_cast<std::uint64_t>(host_lock.l_len), 8);
   write_le(bytes, 24, static_cast<std::uint64_t>(host_lock.l_pid), 4);
 
-  auto written = machine.write_memory(address, bytes);
+  auto written = space.write(address, bytes);
   if (!written)
     return memory_error_to_linux(written.error());
   return std::nullopt;
 }
 
-[[nodiscard]] std::optional<int> write_stat(Machine& machine, address_t address,
+[[nodiscard]] std::optional<int> write_stat(AddressSpace& space, address_t address,
                                             const struct stat& host_stat) noexcept {
   std::array<std::byte, 144> bytes{};
   write_le(bytes, 0, static_cast<std::uint64_t>(host_stat.st_dev), 8);
@@ -609,7 +647,7 @@ void write_le(std::array<std::byte, Size>& bytes, std::size_t offset, std::uint6
   write_le(bytes, 112, static_cast<std::uint64_t>(host_stat.st_ctim.tv_nsec), 8);
 #endif
 
-  auto written = machine.write_memory(address, bytes);
+  auto written = space.write(address, bytes);
   if (!written)
     return memory_error_to_linux(written.error());
   return std::nullopt;
@@ -737,7 +775,7 @@ void copy_c_string(std::array<std::byte, Size>& bytes, std::size_t offset, const
   return host_flags;
 }
 
-[[nodiscard]] std::optional<struct flock> read_flock64(Machine& machine, address_t address, int& error) noexcept {
+[[nodiscard]] std::optional<struct flock> read_flock64(AddressSpace& space, address_t address, int& error) noexcept {
   error = 0;
   if (address == 0 || range_overflows(address, 32)) {
     error = linux_efault;
@@ -745,7 +783,7 @@ void copy_c_string(std::array<std::byte, Size>& bytes, std::size_t offset, const
   }
 
   std::array<std::byte, 32> bytes{};
-  if (auto read_error = read_guest_memory(machine, address, bytes)) {
+  if (auto read_error = read_guest_memory(space, address, bytes)) {
     error = *read_error;
     return std::nullopt;
   }
@@ -862,7 +900,7 @@ struct CStringResult {
   std::string value;
 };
 
-[[nodiscard]] CStringResult read_c_string(Machine& machine, address_t address,
+[[nodiscard]] CStringResult read_c_string(AddressSpace& space, address_t address,
                                           std::size_t max_length = max_path_length) noexcept {
   if (address == 0)
     return {.ok = false, .error = linux_efault, .value = {}};
@@ -871,19 +909,19 @@ struct CStringResult {
     std::string result;
     result.reserve(128);
 
-    std::array<std::byte, Machine::kPageSize> buffer{};
+    std::array<std::byte, AddressSpace::kPageSize> buffer{};
     std::size_t total = 0;
     while (total < max_length) {
       if (range_overflows(address, total + 1))
         return {.ok = false, .error = linux_efault, .value = {}};
 
       const address_t current = address + total;
-      const std::size_t page_remaining = Machine::kPageSize - (current & (Machine::kPageSize - 1));
+      const std::size_t page_remaining = AddressSpace::kPageSize - (current & (AddressSpace::kPageSize - 1));
       const std::size_t chunk_size = std::min(max_length - total, page_remaining);
       if (range_overflows(address, total + chunk_size))
         return {.ok = false, .error = linux_efault, .value = {}};
 
-      auto read = machine.read_memory_into(current, std::span<std::byte>(buffer.data(), chunk_size));
+      auto read = space.read(current, std::span<std::byte>(buffer.data(), chunk_size));
       if (!read)
         return {.ok = false, .error = memory_error_to_linux(read.error()), .value = {}};
 
@@ -905,13 +943,606 @@ struct CStringResult {
   return {.ok = false, .error = linux_enametoolong, .value = {}};
 }
 
+struct GuestStringVectorResult {
+  bool ok = false;
+  int error = 0;
+  std::vector<std::string> values;
+};
+
+[[nodiscard]] std::optional<word_t> read_guest_word(AddressSpace& space, address_t address, int& error) noexcept {
+  std::array<std::byte, sizeof(word_t)> bytes{};
+  if (auto read_error = read_guest_memory(space, address, bytes)) {
+    error = *read_error;
+    return std::nullopt;
+  }
+  return read_le(bytes, 0, sizeof(word_t));
+}
+
+[[nodiscard]] GuestStringVectorResult read_guest_string_vector(AddressSpace& space, address_t vector_address,
+                                                               std::string fallback_argv0) noexcept {
+  constexpr std::size_t max_exec_args = 4096;
+
+  try {
+    std::vector<std::string> values;
+    if (vector_address == 0) {
+      if (!fallback_argv0.empty())
+        values.push_back(std::move(fallback_argv0));
+      return {.ok = true, .error = 0, .values = std::move(values)};
+    }
+
+    for (std::size_t index = 0; index < max_exec_args; ++index) {
+      if (range_overflows(vector_address, (index + 1) * sizeof(word_t)))
+        return {.ok = false, .error = linux_efault, .values = {}};
+
+      int error = 0;
+      const auto pointer = read_guest_word(space, vector_address + index * sizeof(word_t), error);
+      if (!pointer)
+        return {.ok = false, .error = error, .values = {}};
+      if (*pointer == 0)
+        break;
+
+      auto value = read_c_string(space, *pointer);
+      if (!value.ok)
+        return {.ok = false, .error = value.error, .values = {}};
+      values.push_back(std::move(value.value));
+    }
+
+    if (values.size() == max_exec_args)
+      return {.ok = false, .error = linux_e2big, .values = {}};
+    if (values.empty() && !fallback_argv0.empty())
+      values.push_back(std::move(fallback_argv0));
+
+    return {.ok = true, .error = 0, .values = std::move(values)};
+  } catch (const std::bad_alloc&) {
+    return {.ok = false, .error = linux_enomem, .values = {}};
+  } catch (...) {
+    return {.ok = false, .error = linux_eio, .values = {}};
+  }
+}
+
+constexpr address_t exec_stack_top = 0x7fe000000000ULL;
+constexpr std::uint64_t exec_stack_size = 1024 * 1024;
+constexpr unsigned char elf_class_64 = 2;
+constexpr unsigned char elf_data_lsb = 1;
+constexpr std::uint16_t elf_et_exec = 2;
+constexpr std::uint16_t elf_em_x86_64 = 62;
+constexpr std::uint32_t elf_pt_load = 1;
+constexpr std::uint32_t elf_pt_interp = 3;
+constexpr std::uint32_t elf_pf_x = 1;
+constexpr std::uint32_t elf_pf_w = 2;
+constexpr std::uint32_t elf_pf_r = 4;
+
+struct Elf64Ehdr {
+  std::array<unsigned char, 16> e_ident;
+  std::uint16_t e_type;
+  std::uint16_t e_machine;
+  std::uint32_t e_version;
+  std::uint64_t e_entry;
+  std::uint64_t e_phoff;
+  std::uint64_t e_shoff;
+  std::uint32_t e_flags;
+  std::uint16_t e_ehsize;
+  std::uint16_t e_phentsize;
+  std::uint16_t e_phnum;
+  std::uint16_t e_shentsize;
+  std::uint16_t e_shnum;
+  std::uint16_t e_shstrndx;
+};
+
+struct Elf64Phdr {
+  std::uint32_t p_type;
+  std::uint32_t p_flags;
+  std::uint64_t p_offset;
+  std::uint64_t p_vaddr;
+  std::uint64_t p_paddr;
+  std::uint64_t p_filesz;
+  std::uint64_t p_memsz;
+  std::uint64_t p_align;
+};
+
+static_assert(sizeof(Elf64Ehdr) == 64);
+static_assert(sizeof(Elf64Phdr) == 56);
+
+struct LoadedExec {
+  address_t entry = 0;
+  address_t phdr = 0;
+  word_t phent = 0;
+  word_t phnum = 0;
+};
+
+struct ExecLoadError {
+  int error = linux_eio;
+};
+
+struct ExecImageResult {
+  bool ok = false;
+  int error = 0;
+  std::unique_ptr<AddressSpace> address_space;
+  CpuState state;
+};
+
+[[nodiscard]] bool path_exists_for_exec(const std::filesystem::path& path) noexcept {
+  std::error_code ec;
+  return std::filesystem::is_regular_file(path, ec);
+}
+
+[[nodiscard]] std::vector<std::byte> read_exec_file(const std::filesystem::path& path) {
+  std::ifstream input(path, std::ios::binary | std::ios::ate);
+  if (!input)
+    throw ExecLoadError{host_errno_to_linux(errno)};
+
+  const auto size = input.tellg();
+  if (size < 0)
+    throw ExecLoadError{linux_eio};
+
+  std::vector<std::byte> bytes(static_cast<std::size_t>(size));
+  input.seekg(0);
+  if (!bytes.empty())
+    input.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+  if (!input)
+    throw ExecLoadError{linux_eio};
+  return bytes;
+}
+
+template<typename T>
+[[nodiscard]] T read_exec_struct(std::span<const std::byte> bytes, std::uint64_t offset) {
+  if (offset > bytes.size() || bytes.size() - offset < sizeof(T))
+    throw ExecLoadError{linux_enoexec};
+
+  T value{};
+  std::memcpy(&value, bytes.data() + offset, sizeof(T));
+  return value;
+}
+
+[[nodiscard]] address_t exec_page_floor(address_t value) noexcept {
+  return value & ~(AddressSpace::kPageSize - 1);
+}
+
+[[nodiscard]] address_t exec_page_ceil(address_t value) {
+  const address_t mask = AddressSpace::kPageSize - 1;
+  if (value > std::numeric_limits<address_t>::max() - mask)
+    throw ExecLoadError{linux_enoexec};
+  return (value + mask) & ~mask;
+}
+
+[[nodiscard]] Protection exec_protection_from_elf(std::uint32_t flags) noexcept {
+  Protection protection = Protection::none;
+  if ((flags & elf_pf_r) != 0)
+    protection = protection | Protection::read;
+  if ((flags & elf_pf_w) != 0)
+    protection = protection | Protection::write;
+  if ((flags & elf_pf_x) != 0)
+    protection = protection | Protection::execute;
+  return protection;
+}
+
+void exec_checked_map(AddressSpace& address_space, address_t start, std::uint64_t size, Protection protection) {
+  auto mapped = address_space.map(start, size, protection);
+  if (!mapped)
+    throw ExecLoadError{mapped.error() == MemoryError::out_of_memory ? linux_enomem : linux_eio};
+}
+
+void exec_checked_write(AddressSpace& address_space, address_t start, std::span<const std::byte> bytes) {
+  auto written = address_space.write(start, bytes);
+  if (!written)
+    throw ExecLoadError{memory_error_to_linux(written.error())};
+}
+
+[[nodiscard]] LoadedExec load_static_exec(AddressSpace& address_space, const std::filesystem::path& path) {
+  if (!path_exists_for_exec(path))
+    throw ExecLoadError{linux_enoent};
+
+  const auto file = read_exec_file(path);
+  const Elf64Ehdr header = read_exec_struct<Elf64Ehdr>(file, 0);
+
+  if (header.e_ident[0] != 0x7f || header.e_ident[1] != 'E' || header.e_ident[2] != 'L' || header.e_ident[3] != 'F' ||
+      header.e_ident[4] != elf_class_64 || header.e_ident[5] != elf_data_lsb || header.e_type != elf_et_exec ||
+      header.e_machine != elf_em_x86_64 || header.e_phentsize != sizeof(Elf64Phdr)) {
+    throw ExecLoadError{linux_enoexec};
+  }
+
+  if (header.e_phoff > file.size() || header.e_phnum > (file.size() - header.e_phoff) / sizeof(Elf64Phdr))
+    throw ExecLoadError{linux_enoexec};
+
+  LoadedExec loaded{
+      .entry = header.e_entry,
+      .phdr = 0,
+      .phent = header.e_phentsize,
+      .phnum = header.e_phnum,
+  };
+
+  for (std::uint16_t i = 0; i < header.e_phnum; ++i) {
+    const Elf64Phdr phdr =
+        read_exec_struct<Elf64Phdr>(file, header.e_phoff + static_cast<std::uint64_t>(i) * sizeof(Elf64Phdr));
+    if (phdr.p_type == elf_pt_interp)
+      throw ExecLoadError{linux_enoexec};
+  }
+
+  for (std::uint16_t i = 0; i < header.e_phnum; ++i) {
+    const Elf64Phdr phdr =
+        read_exec_struct<Elf64Phdr>(file, header.e_phoff + static_cast<std::uint64_t>(i) * sizeof(Elf64Phdr));
+    if (phdr.p_type != elf_pt_load || phdr.p_memsz == 0)
+      continue;
+    if (phdr.p_filesz > phdr.p_memsz || phdr.p_vaddr > std::numeric_limits<address_t>::max() - phdr.p_memsz)
+      throw ExecLoadError{linux_enoexec};
+    if (phdr.p_offset > file.size() || phdr.p_filesz > file.size() - phdr.p_offset)
+      throw ExecLoadError{linux_enoexec};
+
+    const address_t map_start = exec_page_floor(phdr.p_vaddr);
+    const address_t map_end = exec_page_ceil(phdr.p_vaddr + phdr.p_memsz);
+    exec_checked_map(address_space, map_start, map_end - map_start, exec_protection_from_elf(phdr.p_flags));
+
+    if (phdr.p_filesz != 0) {
+      exec_checked_write(
+          address_space, phdr.p_vaddr,
+          std::span<const std::byte>(file.data() + phdr.p_offset, static_cast<std::size_t>(phdr.p_filesz)));
+    }
+
+    if (header.e_phoff >= phdr.p_offset && header.e_phoff < phdr.p_offset + phdr.p_filesz)
+      loaded.phdr = phdr.p_vaddr + (header.e_phoff - phdr.p_offset);
+  }
+
+  return loaded;
+}
+
+void append_exec_word(std::vector<std::byte>& bytes, word_t value) {
+  for (std::size_t i = 0; i < sizeof(word_t); ++i)
+    bytes.push_back(static_cast<std::byte>((value >> (i * 8)) & 0xff));
+}
+
+[[nodiscard]] address_t setup_exec_stack(AddressSpace& address_space, std::span<const std::string> argv,
+                                         std::span<const std::string> envp, const LoadedExec& loaded) {
+  const address_t stack_base = exec_stack_top - exec_stack_size;
+  exec_checked_map(address_space, stack_base, exec_stack_size, Protection::read | Protection::write);
+
+  address_t cursor = exec_stack_top;
+  std::vector<address_t> envp_addresses(envp.size());
+  for (std::size_t i = envp.size(); i > 0; --i) {
+    const std::string& value = envp[i - 1];
+    if (value.size() + 1 > cursor - stack_base)
+      throw ExecLoadError{linux_e2big};
+
+    cursor -= value.size() + 1;
+    std::vector<std::byte> bytes(value.size() + 1);
+    std::memcpy(bytes.data(), value.data(), value.size());
+    exec_checked_write(address_space, cursor, bytes);
+    envp_addresses[i - 1] = cursor;
+  }
+
+  std::vector<address_t> argv_addresses(argv.size());
+  for (std::size_t i = argv.size(); i > 0; --i) {
+    const std::string& arg = argv[i - 1];
+    if (arg.size() + 1 > cursor - stack_base)
+      throw ExecLoadError{linux_e2big};
+
+    cursor -= arg.size() + 1;
+    std::vector<std::byte> bytes(arg.size() + 1);
+    std::memcpy(bytes.data(), arg.data(), arg.size());
+    exec_checked_write(address_space, cursor, bytes);
+    argv_addresses[i - 1] = cursor;
+  }
+
+  cursor -= 16;
+  constexpr std::array<std::byte, 16> random_bytes{
+      std::byte{0x52}, std::byte{0x41}, std::byte{0x53}, std::byte{0x50}, std::byte{0x73}, std::byte{0x69},
+      std::byte{0x6d}, std::byte{0x21}, std::byte{0x10}, std::byte{0x32}, std::byte{0x54}, std::byte{0x76},
+      std::byte{0x98}, std::byte{0xba}, std::byte{0xdc}, std::byte{0xfe},
+  };
+  exec_checked_write(address_space, cursor, random_bytes);
+  const address_t random_address = cursor;
+
+  cursor &= ~static_cast<address_t>(0xf);
+
+  constexpr word_t at_null = 0;
+  constexpr word_t at_phdr = 3;
+  constexpr word_t at_phent = 4;
+  constexpr word_t at_phnum = 5;
+  constexpr word_t at_pagesz = 6;
+  constexpr word_t at_base = 7;
+  constexpr word_t at_flags = 8;
+  constexpr word_t at_entry = 9;
+  constexpr word_t at_uid = 11;
+  constexpr word_t at_euid = 12;
+  constexpr word_t at_gid = 13;
+  constexpr word_t at_egid = 14;
+  constexpr word_t at_clktck = 17;
+  constexpr word_t at_secure = 23;
+  constexpr word_t at_random = 25;
+
+  std::vector<word_t> words;
+  words.push_back(argv.size());
+  for (address_t arg_address : argv_addresses)
+    words.push_back(arg_address);
+  words.push_back(0);
+  for (address_t env_address : envp_addresses)
+    words.push_back(env_address);
+  words.push_back(0);
+  if (loaded.phdr != 0) {
+    words.push_back(at_phdr);
+    words.push_back(loaded.phdr);
+    words.push_back(at_phent);
+    words.push_back(loaded.phent);
+    words.push_back(at_phnum);
+    words.push_back(loaded.phnum);
+  }
+  words.push_back(at_pagesz);
+  words.push_back(AddressSpace::kPageSize);
+  words.push_back(at_base);
+  words.push_back(0);
+  words.push_back(at_flags);
+  words.push_back(0);
+  words.push_back(at_entry);
+  words.push_back(loaded.entry);
+  words.push_back(at_uid);
+  words.push_back(1000);
+  words.push_back(at_euid);
+  words.push_back(1000);
+  words.push_back(at_gid);
+  words.push_back(1000);
+  words.push_back(at_egid);
+  words.push_back(1000);
+  words.push_back(at_clktck);
+  words.push_back(100);
+  words.push_back(at_secure);
+  words.push_back(0);
+  words.push_back(at_random);
+  words.push_back(random_address);
+  words.push_back(at_null);
+  words.push_back(0);
+
+  if (words.size() * sizeof(word_t) > cursor - stack_base)
+    throw ExecLoadError{linux_e2big};
+  cursor -= words.size() * sizeof(word_t);
+  cursor &= ~static_cast<address_t>(0xf);
+
+  std::vector<std::byte> stack_words;
+  stack_words.reserve(words.size() * sizeof(word_t));
+  for (word_t word : words)
+    append_exec_word(stack_words, word);
+  exec_checked_write(address_space, cursor, stack_words);
+
+  return cursor;
+}
+
+[[nodiscard]] ExecImageResult load_exec_image(const std::filesystem::path& path, std::span<const std::string> argv,
+                                              std::span<const std::string> envp) noexcept {
+  try {
+    auto address_space = std::make_unique<AddressSpace>();
+    const LoadedExec loaded = load_static_exec(*address_space, path);
+    const address_t rsp = setup_exec_stack(*address_space, argv, envp, loaded);
+
+    CpuState state;
+    state[Register::rip] = loaded.entry;
+    state[Register::rsp] = rsp;
+    return {.ok = true, .error = 0, .address_space = std::move(address_space), .state = state};
+  } catch (const ExecLoadError& error) {
+    return {.ok = false, .error = error.error, .address_space = nullptr, .state = {}};
+  } catch (const std::bad_alloc&) {
+    return {.ok = false, .error = linux_enomem, .address_space = nullptr, .state = {}};
+  } catch (...) {
+    return {.ok = false, .error = linux_eio, .address_space = nullptr, .state = {}};
+  }
+}
+
 } // namespace detail
 
-std::optional<SyscallResult> SysRead::try_syscall(Machine& machine, RegisterFile& context, SyscallKind kind) noexcept {
+namespace {
+
+struct PendingRead {
+  ProcessId context_id = invalid_process_id;
+  address_t buffer_address = 0;
+  word_t count = 0;
+};
+
+std::unordered_map<int, std::vector<PendingRead>> pending_reads;
+std::unordered_map<int, int> pipe_read_fd_for_write_fd;
+std::unordered_map<ProcessId, std::unordered_map<int, int>> fd_tables;
+
+struct BrkState {
+  address_t minimum_break = detail::default_brk_base;
+  address_t current_break = detail::default_brk_base;
+  address_t mapped_end = detail::default_brk_base;
+};
+
+std::unordered_map<ProcessId, BrkState> brk_states;
+
+void copy_pipe_write_mapping(int old_fd, int new_fd);
+void forget_fd_wait_state(int fd);
+
+BrkState& brk_state(ProcessId context_id, address_t initial_break = detail::default_brk_base) {
+  auto [it, inserted] = brk_states.try_emplace(context_id);
+  if (inserted)
+    it->second = BrkState{.minimum_break = initial_break, .current_break = initial_break, .mapped_end = initial_break};
+  return it->second;
+}
+
+void clone_brk_state(ProcessId parent, ProcessId child) {
+  brk_states[child] = brk_state(parent);
+}
+
+void reset_brk_state(ProcessId context_id, address_t initial_break = detail::default_brk_base) {
+  brk_states[context_id] =
+      BrkState{.minimum_break = initial_break, .current_break = initial_break, .mapped_end = initial_break};
+}
+
+void erase_brk_state(ProcessId context_id) {
+  brk_states.erase(context_id);
+}
+
+std::unordered_map<int, int>& fd_table(ProcessId context_id) {
+  auto& table = fd_tables[context_id];
+  if (context_id == 1 && table.empty()) {
+    table.emplace(0, 0);
+    table.emplace(1, 1);
+    table.emplace(2, 2);
+  }
+  return table;
+}
+
+[[nodiscard]] std::optional<int> host_fd_for(ProcessId context_id, word_t raw_fd) {
+  auto guest_fd = detail::checked_fd(raw_fd);
+  if (!guest_fd)
+    return std::nullopt;
+
+  auto& table = fd_table(context_id);
+  auto it = table.find(*guest_fd);
+  if (it == table.end())
+    return std::nullopt;
+  return it->second;
+}
+
+[[nodiscard]] std::optional<int> host_dirfd_for(ProcessId context_id, word_t raw_fd) {
+  if (detail::is_linux_at_fdcwd(raw_fd))
+    return AT_FDCWD;
+  return host_fd_for(context_id, raw_fd);
+}
+
+[[nodiscard]] int next_guest_fd(ProcessId context_id, int minimum = 0) {
+  auto& table = fd_table(context_id);
+  for (int fd = minimum; fd < std::numeric_limits<int>::max(); ++fd) {
+    if (!table.contains(fd))
+      return fd;
+  }
+  return -1;
+}
+
+[[nodiscard]] int install_fd(ProcessId context_id, int host_fd, int preferred_guest_fd = -1) {
+  auto& table = fd_table(context_id);
+  int guest_fd = preferred_guest_fd;
+  if (guest_fd < 0)
+    guest_fd = next_guest_fd(context_id);
+  if (guest_fd < 0)
+    return -1;
+
+  if (auto existing = table.find(guest_fd); existing != table.end()) {
+    if (existing->second != host_fd) {
+      forget_fd_wait_state(existing->second);
+      close(existing->second);
+    }
+  }
+  table[guest_fd] = host_fd;
+  return guest_fd;
+}
+
+[[nodiscard]] bool close_guest_fd(ProcessId context_id, int guest_fd) {
+  auto& table = fd_table(context_id);
+  auto it = table.find(guest_fd);
+  if (it == table.end())
+    return false;
+
+  const int host_fd = it->second;
+  table.erase(it);
+  forget_fd_wait_state(host_fd);
+  return close(host_fd) == 0;
+}
+
+void clone_fd_table(ProcessId parent, ProcessId child) {
+  auto& child_table = fd_table(child);
+  child_table.clear();
+  for (const auto& [guest_fd, host_fd] : fd_table(parent)) {
+    const int duplicated = dup(host_fd);
+    if (duplicated < 0)
+      continue;
+    child_table[guest_fd] = duplicated;
+    copy_pipe_write_mapping(host_fd, duplicated);
+  }
+}
+
+void close_fd_table(ProcessId context_id) {
+  auto table = std::move(fd_table(context_id));
+  fd_tables.erase(context_id);
+  for (const auto& [guest_fd, host_fd] : table) {
+    (void)guest_fd;
+    forget_fd_wait_state(host_fd);
+    close(host_fd);
+  }
+}
+
+[[nodiscard]] bool would_block_errno(int value) noexcept {
+  return value == EAGAIN
+#if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
+         || value == EWOULDBLOCK
+#endif
+      ;
+}
+
+[[nodiscard]] bool fd_read_ready(int fd) noexcept {
+  fd_set read_set;
+  FD_ZERO(&read_set);
+  FD_SET(fd, &read_set);
+  timeval timeout{.tv_sec = 0, .tv_usec = 0};
+  const int result = select(fd + 1, &read_set, nullptr, nullptr, &timeout);
+  return result != 0;
+}
+
+// Phase 1 runs a single process, so blocking reads complete synchronously in
+// SysRead and nothing is ever parked in `pending_reads`. The deferred-completion
+// path below woke a *different* parked context, which needs the multi-process
+// scheduler Phase 2 reintroduces.
+// TODO(phase2): restore deferred read completion against the scheduler.
+[[nodiscard]] bool complete_one_pending_read(Machine&, int read_fd) {
+  pending_reads.erase(read_fd);
+  return false;
+}
+
+void complete_all_pending_reads(Machine& machine) {
+  bool progressed = true;
+  while (progressed) {
+    progressed = false;
+    std::vector<int> fds;
+    fds.reserve(pending_reads.size());
+    for (const auto& [fd, waiters] : pending_reads)
+      fds.push_back(fd);
+
+    for (int fd : fds)
+      progressed = complete_one_pending_read(machine, fd) || progressed;
+  }
+}
+
+void complete_pending_pipe_reads(Machine& machine, int write_fd) {
+  auto read_fd = pipe_read_fd_for_write_fd.find(write_fd);
+  if (read_fd == pipe_read_fd_for_write_fd.end()) {
+    complete_all_pending_reads(machine);
+    return;
+  }
+
+  while (complete_one_pending_read(machine, read_fd->second)) {}
+  complete_all_pending_reads(machine);
+}
+
+void copy_pipe_write_mapping(int old_fd, int new_fd) {
+  auto read_fd = pipe_read_fd_for_write_fd.find(old_fd);
+  if (read_fd != pipe_read_fd_for_write_fd.end())
+    pipe_read_fd_for_write_fd[new_fd] = read_fd->second;
+}
+
+void forget_fd_wait_state(int fd) {
+  pending_reads.erase(fd);
+  pipe_read_fd_for_write_fd.erase(fd);
+  for (auto it = pipe_read_fd_for_write_fd.begin(); it != pipe_read_fd_for_write_fd.end();) {
+    if (it->second == fd)
+      it = pipe_read_fd_for_write_fd.erase(it);
+    else
+      ++it;
+  }
+}
+
+void ensure_host_sigpipe_ignored() {
+  static const bool ignored = [] {
+    std::signal(SIGPIPE, SIG_IGN);
+    return true;
+  }();
+  (void)ignored;
+}
+
+} // namespace
+
+std::optional<SyscallResult> SysRead::try_syscall(Machine& machine, ProcessId context_id, CpuState& context,
+                                                  AddressSpace& space, SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_read))
     return std::nullopt;
 
-  const auto fd = detail::checked_fd(detail::syscall_arg(context, 0));
+  const auto fd = host_fd_for(context_id, detail::syscall_arg(context, 0));
   if (!fd)
     return detail::return_error(context, detail::linux_ebadf);
 
@@ -923,6 +1554,8 @@ std::optional<SyscallResult> SysRead::try_syscall(Machine& machine, RegisterFile
     return detail::return_error(context, detail::linux_efault);
 
   try {
+    // Phase 1 is single-process: a read with no data ready blocks the host
+    // thread synchronously rather than parking the context for the scheduler.
     std::vector<std::byte> buffer(static_cast<std::size_t>(count));
     const ssize_t bytes_read = read(*fd, buffer.data(), buffer.size());
     if (bytes_read < 0)
@@ -931,8 +1564,8 @@ std::optional<SyscallResult> SysRead::try_syscall(Machine& machine, RegisterFile
     if (bytes_read == 0)
       return detail::return_value(context, 0);
 
-    auto written = machine.write_memory(
-        buffer_address, std::span<const std::byte>(buffer.data(), static_cast<std::size_t>(bytes_read)));
+    auto written =
+        space.write(buffer_address, std::span<const std::byte>(buffer.data(), static_cast<std::size_t>(bytes_read)));
     if (!written)
       return detail::return_error(context, detail::memory_error_to_linux(written.error()));
 
@@ -944,8 +1577,8 @@ std::optional<SyscallResult> SysRead::try_syscall(Machine& machine, RegisterFile
   }
 }
 
-std::optional<SyscallResult> SysReadlink::try_syscall(Machine& machine, RegisterFile& context,
-                                                      SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysReadlink::try_syscall(Machine& machine, ProcessId context_id, CpuState& context,
+                                                      AddressSpace& space, SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_readlink) &&
       !detail::handles(context, kind, detail::syscall_readlinkat)) {
     return std::nullopt;
@@ -960,7 +1593,7 @@ std::optional<SyscallResult> SysReadlink::try_syscall(Machine& machine, Register
   if (detail::range_overflows(buffer_address, buffer_size))
     return detail::return_error(context, detail::linux_efault);
 
-  auto path = detail::read_c_string(machine, path_address);
+  auto path = detail::read_c_string(space, path_address);
   if (!path.ok)
     return detail::return_error(context, path.error);
 
@@ -969,7 +1602,7 @@ std::optional<SyscallResult> SysReadlink::try_syscall(Machine& machine, Register
     ssize_t bytes_read = -1;
     if (is_readlinkat) {
       const word_t raw_fd = detail::syscall_arg(context, 0);
-      auto fd = detail::dirfd_from_linux(raw_fd);
+      auto fd = host_dirfd_for(context_id, raw_fd);
       if (!fd)
         return detail::return_error(context, detail::linux_ebadf);
       bytes_read = readlinkat(*fd, path.value.c_str(), reinterpret_cast<char*>(buffer.data()), buffer.size());
@@ -979,8 +1612,8 @@ std::optional<SyscallResult> SysReadlink::try_syscall(Machine& machine, Register
     if (bytes_read < 0)
       return detail::return_error(context, detail::host_errno_to_linux(errno));
 
-    auto written = machine.write_memory(
-        buffer_address, std::span<const std::byte>(buffer.data(), static_cast<std::size_t>(bytes_read)));
+    auto written =
+        space.write(buffer_address, std::span<const std::byte>(buffer.data(), static_cast<std::size_t>(bytes_read)));
     if (!written)
       return detail::return_error(context, detail::memory_error_to_linux(written.error()));
 
@@ -992,11 +1625,12 @@ std::optional<SyscallResult> SysReadlink::try_syscall(Machine& machine, Register
   }
 }
 
-std::optional<SyscallResult> SysWrite::try_syscall(Machine& machine, RegisterFile& context, SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysWrite::try_syscall(Machine& machine, ProcessId context_id, CpuState& context,
+                                                   AddressSpace& space, SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_write))
     return std::nullopt;
 
-  const auto fd = detail::checked_fd(detail::syscall_arg(context, 0));
+  const auto fd = host_fd_for(context_id, detail::syscall_arg(context, 0));
   if (!fd)
     return detail::return_error(context, detail::linux_ebadf);
 
@@ -1008,14 +1642,16 @@ std::optional<SyscallResult> SysWrite::try_syscall(Machine& machine, RegisterFil
     return detail::return_error(context, detail::linux_efault);
 
   try {
-    std::array<std::byte, Machine::kPageSize> buffer{};
+    ensure_host_sigpipe_ignored();
+    std::array<std::byte, AddressSpace::kPageSize> buffer{};
     word_t total = 0;
     while (total < count) {
       const auto address = buffer_address + total;
-      const auto page_remaining = static_cast<word_t>(Machine::kPageSize - (address & (Machine::kPageSize - 1)));
+      const auto page_remaining =
+          static_cast<word_t>(AddressSpace::kPageSize - (address & (AddressSpace::kPageSize - 1)));
       const auto chunk_limit = std::min<word_t>(count - total, static_cast<word_t>(detail::io_chunk_size));
       const auto chunk_size = static_cast<std::size_t>(std::min(chunk_limit, page_remaining));
-      auto read = machine.read_memory_into(address, std::span<std::byte>(buffer.data(), chunk_size));
+      auto read = space.read(address, std::span<std::byte>(buffer.data(), chunk_size));
       if (!read)
         return total == 0 ? detail::return_error(context, detail::memory_error_to_linux(read.error()))
                           : detail::return_value(context, static_cast<std::int64_t>(total));
@@ -1026,10 +1662,12 @@ std::optional<SyscallResult> SysWrite::try_syscall(Machine& machine, RegisterFil
                           : detail::return_value(context, static_cast<std::int64_t>(total));
 
       total += static_cast<word_t>(written);
+      complete_pending_pipe_reads(machine, *fd);
       if (static_cast<std::size_t>(written) < chunk_size)
         return detail::return_value(context, static_cast<std::int64_t>(total));
     }
 
+    complete_pending_pipe_reads(machine, *fd);
     return detail::return_value(context, static_cast<std::int64_t>(total));
   } catch (const std::bad_alloc&) {
     return detail::return_error(context, detail::linux_enomem);
@@ -1038,14 +1676,14 @@ std::optional<SyscallResult> SysWrite::try_syscall(Machine& machine, RegisterFil
   }
 }
 
-std::optional<SyscallResult> SysPreadPwrite::try_syscall(Machine& machine, RegisterFile& context,
-                                                         SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysPreadPwrite::try_syscall(Machine& machine, ProcessId context_id, CpuState& context,
+                                                         AddressSpace& space, SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_pread64) &&
       !detail::handles(context, kind, detail::syscall_pwrite64)) {
     return std::nullopt;
   }
 
-  const auto fd = detail::checked_fd(detail::syscall_arg(context, 0));
+  const auto fd = host_fd_for(context_id, detail::syscall_arg(context, 0));
   if (!fd)
     return detail::return_error(context, detail::linux_ebadf);
 
@@ -1068,21 +1706,22 @@ std::optional<SyscallResult> SysPreadPwrite::try_syscall(Machine& machine, Regis
       if (bytes_read == 0)
         return detail::return_value(context, 0);
 
-      auto written = machine.write_memory(
-          buffer_address, std::span<const std::byte>(buffer.data(), static_cast<std::size_t>(bytes_read)));
+      auto written =
+          space.write(buffer_address, std::span<const std::byte>(buffer.data(), static_cast<std::size_t>(bytes_read)));
       if (!written)
         return detail::return_error(context, detail::memory_error_to_linux(written.error()));
       return detail::return_value(context, bytes_read);
     }
 
-    std::array<std::byte, Machine::kPageSize> buffer{};
+    std::array<std::byte, AddressSpace::kPageSize> buffer{};
     word_t total = 0;
     while (total < count) {
       const auto address = buffer_address + total;
-      const auto page_remaining = static_cast<word_t>(Machine::kPageSize - (address & (Machine::kPageSize - 1)));
+      const auto page_remaining =
+          static_cast<word_t>(AddressSpace::kPageSize - (address & (AddressSpace::kPageSize - 1)));
       const auto chunk_limit = std::min<word_t>(count - total, static_cast<word_t>(detail::io_chunk_size));
       const auto chunk_size = static_cast<std::size_t>(std::min(chunk_limit, page_remaining));
-      auto read = machine.read_memory_into(address, std::span<std::byte>(buffer.data(), chunk_size));
+      auto read = space.read(address, std::span<std::byte>(buffer.data(), chunk_size));
       if (!read)
         return total == 0 ? detail::return_error(context, detail::memory_error_to_linux(read.error()))
                           : detail::return_value(context, static_cast<std::int64_t>(total));
@@ -1105,13 +1744,14 @@ std::optional<SyscallResult> SysPreadPwrite::try_syscall(Machine& machine, Regis
   }
 }
 
-std::optional<SyscallResult> SysOpen::try_syscall(Machine& machine, RegisterFile& context, SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysOpen::try_syscall(Machine& machine, ProcessId context_id, CpuState& context,
+                                                  AddressSpace& space, SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_open) && !detail::handles(context, kind, detail::syscall_openat))
     return std::nullopt;
 
   const bool is_openat = detail::syscall_number(context) == detail::syscall_openat;
   const address_t path_address = detail::syscall_arg(context, is_openat ? 1 : 0);
-  auto path = detail::read_c_string(machine, path_address);
+  auto path = detail::read_c_string(space, path_address);
   if (!path.ok)
     return detail::return_error(context, path.error);
 
@@ -1123,7 +1763,7 @@ std::optional<SyscallResult> SysOpen::try_syscall(Machine& machine, RegisterFile
   int fd = -1;
   if (is_openat) {
     const word_t raw_dirfd = detail::syscall_arg(context, 0);
-    auto dirfd = detail::dirfd_from_linux(raw_dirfd);
+    auto dirfd = host_dirfd_for(context_id, raw_dirfd);
     if (!dirfd)
       return detail::return_error(context, detail::linux_ebadf);
     fd = openat(*dirfd, path.value.c_str(), *flags, mode);
@@ -1133,24 +1773,33 @@ std::optional<SyscallResult> SysOpen::try_syscall(Machine& machine, RegisterFile
   if (fd < 0)
     return detail::return_error(context, detail::host_errno_to_linux(errno));
 
-  return detail::return_value(context, fd);
+  const int guest_fd = install_fd(context_id, fd);
+  if (guest_fd < 0) {
+    close(fd);
+    return detail::return_error(context, detail::linux_emfile);
+  }
+  return detail::return_value(context, guest_fd);
 }
 
-std::optional<SyscallResult> SysClose::try_syscall(Machine&, RegisterFile& context, SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysClose::try_syscall(Machine&, ProcessId context_id, CpuState& context,
+                                                   AddressSpace& space, SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_close))
     return std::nullopt;
 
-  const auto fd = detail::checked_fd(detail::syscall_arg(context, 0));
-  if (!fd)
+  const auto guest_fd = detail::checked_fd(detail::syscall_arg(context, 0));
+  if (!guest_fd)
+    return detail::return_error(context, detail::linux_ebadf);
+  if (!host_fd_for(context_id, *guest_fd))
     return detail::return_error(context, detail::linux_ebadf);
 
-  if (close(*fd) < 0)
+  if (!close_guest_fd(context_id, *guest_fd))
     return detail::return_error(context, detail::host_errno_to_linux(errno));
 
   return detail::return_value(context, 0);
 }
 
-std::optional<SyscallResult> SysPipe::try_syscall(Machine& machine, RegisterFile& context, SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysPipe::try_syscall(Machine& machine, ProcessId context_id, CpuState& context,
+                                                  AddressSpace& space, SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_pipe))
     return std::nullopt;
 
@@ -1162,25 +1811,49 @@ std::optional<SyscallResult> SysPipe::try_syscall(Machine& machine, RegisterFile
   if (pipe(pipefds) < 0)
     return detail::return_error(context, detail::host_errno_to_linux(errno));
 
-  if (auto error = detail::write_int32(machine, pipefd_address, pipefds[0])) {
+  const int read_flags = fcntl(pipefds[0], F_GETFL, 0);
+  if (read_flags < 0 || fcntl(pipefds[0], F_SETFL, read_flags | O_NONBLOCK) < 0) {
+    const int saved_errno = errno;
     close(pipefds[0]);
     close(pipefds[1]);
+    return detail::return_error(context, detail::host_errno_to_linux(saved_errno));
+  }
+
+  const int read_guest_fd = install_fd(context_id, pipefds[0]);
+  const int write_guest_fd = install_fd(context_id, pipefds[1]);
+  if (read_guest_fd < 0 || write_guest_fd < 0) {
+    if (read_guest_fd >= 0)
+      (void)close_guest_fd(context_id, read_guest_fd);
+    else
+      close(pipefds[0]);
+    if (write_guest_fd >= 0)
+      (void)close_guest_fd(context_id, write_guest_fd);
+    else
+      close(pipefds[1]);
+    return detail::return_error(context, detail::linux_emfile);
+  }
+
+  if (auto error = detail::write_int32(space, pipefd_address, read_guest_fd)) {
+    (void)close_guest_fd(context_id, read_guest_fd);
+    (void)close_guest_fd(context_id, write_guest_fd);
     return detail::return_error(context, *error);
   }
-  if (auto error = detail::write_int32(machine, pipefd_address + 4, pipefds[1])) {
-    close(pipefds[0]);
-    close(pipefds[1]);
+  if (auto error = detail::write_int32(space, pipefd_address + 4, write_guest_fd)) {
+    (void)close_guest_fd(context_id, read_guest_fd);
+    (void)close_guest_fd(context_id, write_guest_fd);
     return detail::return_error(context, *error);
   }
 
+  pipe_read_fd_for_write_fd[pipefds[1]] = pipefds[0];
   return detail::return_value(context, 0);
 }
 
-std::optional<SyscallResult> SysFstat::try_syscall(Machine& machine, RegisterFile& context, SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysFstat::try_syscall(Machine& machine, ProcessId context_id, CpuState& context,
+                                                   AddressSpace& space, SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_fstat))
     return std::nullopt;
 
-  const auto fd = detail::checked_fd(detail::syscall_arg(context, 0));
+  const auto fd = host_fd_for(context_id, detail::syscall_arg(context, 0));
   if (!fd)
     return detail::return_error(context, detail::linux_ebadf);
 
@@ -1188,12 +1861,13 @@ std::optional<SyscallResult> SysFstat::try_syscall(Machine& machine, RegisterFil
   if (fstat(*fd, &host_stat) < 0)
     return detail::return_error(context, detail::host_errno_to_linux(errno));
 
-  if (auto error = detail::write_stat(machine, detail::syscall_arg(context, 1), host_stat))
+  if (auto error = detail::write_stat(space, detail::syscall_arg(context, 1), host_stat))
     return detail::return_error(context, *error);
   return detail::return_value(context, 0);
 }
 
-std::optional<SyscallResult> SysStat::try_syscall(Machine& machine, RegisterFile& context, SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysStat::try_syscall(Machine& machine, ProcessId context_id, CpuState& context,
+                                                  AddressSpace& space, SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_stat) && !detail::handles(context, kind, detail::syscall_lstat) &&
       !detail::handles(context, kind, detail::syscall_newfstatat)) {
     return std::nullopt;
@@ -1208,7 +1882,7 @@ std::optional<SyscallResult> SysStat::try_syscall(Machine& machine, RegisterFile
   if ((flags & ~supported_flags) != 0)
     return detail::return_error(context, detail::linux_einval);
 
-  auto path = detail::read_c_string(machine, path_address);
+  auto path = detail::read_c_string(space, path_address);
   if (!path.ok)
     return detail::return_error(context, path.error);
 
@@ -1216,7 +1890,7 @@ std::optional<SyscallResult> SysStat::try_syscall(Machine& machine, RegisterFile
   int result = -1;
   if (is_newfstatat) {
     const word_t raw_dirfd = detail::syscall_arg(context, 0);
-    auto dirfd = detail::dirfd_from_linux(raw_dirfd);
+    auto dirfd = host_dirfd_for(context_id, raw_dirfd);
     if (!dirfd)
       return detail::return_error(context, detail::linux_ebadf);
     int host_flags = 0;
@@ -1238,17 +1912,17 @@ std::optional<SyscallResult> SysStat::try_syscall(Machine& machine, RegisterFile
   if (result < 0)
     return detail::return_error(context, detail::host_errno_to_linux(errno));
 
-  if (auto error = detail::write_stat(machine, stat_address, host_stat))
+  if (auto error = detail::write_stat(space, stat_address, host_stat))
     return detail::return_error(context, *error);
   return detail::return_value(context, 0);
 }
 
-std::optional<SyscallResult> SysGetdents64::try_syscall(Machine& machine, RegisterFile& context,
-                                                        SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysGetdents64::try_syscall(Machine& machine, ProcessId context_id, CpuState& context,
+                                                        AddressSpace& space, SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_getdents64))
     return std::nullopt;
 
-  const auto fd = detail::checked_fd(detail::syscall_arg(context, 0));
+  const auto fd = host_fd_for(context_id, detail::syscall_arg(context, 0));
   if (!fd)
     return detail::return_error(context, detail::linux_ebadf);
 
@@ -1320,7 +1994,7 @@ std::optional<SyscallResult> SysGetdents64::try_syscall(Machine& machine, Regist
       return detail::return_value(context, 0);
     }
 
-    auto written = machine.write_memory(buffer_address, output);
+    auto written = space.write(buffer_address, output);
     if (!written) {
       closedir(directory);
       return detail::return_error(context, detail::memory_error_to_linux(written.error()));
@@ -1338,12 +2012,14 @@ std::optional<SyscallResult> SysGetdents64::try_syscall(Machine& machine, Regist
   }
 }
 
-std::optional<SyscallResult> SysFileSystem::try_syscall(Machine& machine, RegisterFile& context,
-                                                        SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysFileSystem::try_syscall(Machine& machine, ProcessId context_id, CpuState& context,
+                                                        AddressSpace& space, SyscallKind kind) noexcept {
   const word_t number = detail::syscall_number(context);
   if (!detail::handles(context, kind, detail::syscall_access) &&
       !detail::handles(context, kind, detail::syscall_chdir) &&
       !detail::handles(context, kind, detail::syscall_fchdir) &&
+      !detail::handles(context, kind, detail::syscall_truncate) &&
+      !detail::handles(context, kind, detail::syscall_ftruncate) &&
       !detail::handles(context, kind, detail::syscall_rename) &&
       !detail::handles(context, kind, detail::syscall_mkdir) &&
       !detail::handles(context, kind, detail::syscall_rmdir) &&
@@ -1361,7 +2037,7 @@ std::optional<SyscallResult> SysFileSystem::try_syscall(Machine& machine, Regist
 
   switch (number) {
   case detail::syscall_access: {
-    auto path = detail::read_c_string(machine, detail::syscall_arg(context, 0));
+    auto path = detail::read_c_string(space, detail::syscall_arg(context, 0));
     if (!path.ok)
       return detail::return_error(context, path.error);
 
@@ -1370,7 +2046,7 @@ std::optional<SyscallResult> SysFileSystem::try_syscall(Machine& machine, Regist
     return detail::return_value(context, 0);
   }
   case detail::syscall_chdir: {
-    auto path = detail::read_c_string(machine, detail::syscall_arg(context, 0));
+    auto path = detail::read_c_string(space, detail::syscall_arg(context, 0));
     if (!path.ok)
       return detail::return_error(context, path.error);
 
@@ -1379,7 +2055,7 @@ std::optional<SyscallResult> SysFileSystem::try_syscall(Machine& machine, Regist
     return detail::return_value(context, 0);
   }
   case detail::syscall_fchdir: {
-    auto fd = detail::checked_fd(detail::syscall_arg(context, 0));
+    auto fd = host_fd_for(context_id, detail::syscall_arg(context, 0));
     if (!fd)
       return detail::return_error(context, detail::linux_ebadf);
 
@@ -1387,11 +2063,31 @@ std::optional<SyscallResult> SysFileSystem::try_syscall(Machine& machine, Regist
       return detail::return_error(context, detail::host_errno_to_linux(errno));
     return detail::return_value(context, 0);
   }
+  case detail::syscall_truncate: {
+    auto path = detail::read_c_string(space, detail::syscall_arg(context, 0));
+    if (!path.ok)
+      return detail::return_error(context, path.error);
+
+    const auto length = static_cast<off_t>(detail::syscall_arg(context, 1));
+    if (truncate(path.value.c_str(), length) < 0)
+      return detail::return_error(context, detail::host_errno_to_linux(errno));
+    return detail::return_value(context, 0);
+  }
+  case detail::syscall_ftruncate: {
+    auto fd = host_fd_for(context_id, detail::syscall_arg(context, 0));
+    if (!fd)
+      return detail::return_error(context, detail::linux_ebadf);
+
+    const auto length = static_cast<off_t>(detail::syscall_arg(context, 1));
+    if (ftruncate(*fd, length) < 0)
+      return detail::return_error(context, detail::host_errno_to_linux(errno));
+    return detail::return_value(context, 0);
+  }
   case detail::syscall_rename: {
-    auto old_path = detail::read_c_string(machine, detail::syscall_arg(context, 0));
+    auto old_path = detail::read_c_string(space, detail::syscall_arg(context, 0));
     if (!old_path.ok)
       return detail::return_error(context, old_path.error);
-    auto new_path = detail::read_c_string(machine, detail::syscall_arg(context, 1));
+    auto new_path = detail::read_c_string(space, detail::syscall_arg(context, 1));
     if (!new_path.ok)
       return detail::return_error(context, new_path.error);
 
@@ -1400,7 +2096,7 @@ std::optional<SyscallResult> SysFileSystem::try_syscall(Machine& machine, Regist
     return detail::return_value(context, 0);
   }
   case detail::syscall_mkdir: {
-    auto path = detail::read_c_string(machine, detail::syscall_arg(context, 0));
+    auto path = detail::read_c_string(space, detail::syscall_arg(context, 0));
     if (!path.ok)
       return detail::return_error(context, path.error);
 
@@ -1410,7 +2106,7 @@ std::optional<SyscallResult> SysFileSystem::try_syscall(Machine& machine, Regist
     return detail::return_value(context, 0);
   }
   case detail::syscall_rmdir: {
-    auto path = detail::read_c_string(machine, detail::syscall_arg(context, 0));
+    auto path = detail::read_c_string(space, detail::syscall_arg(context, 0));
     if (!path.ok)
       return detail::return_error(context, path.error);
 
@@ -1419,7 +2115,7 @@ std::optional<SyscallResult> SysFileSystem::try_syscall(Machine& machine, Regist
     return detail::return_value(context, 0);
   }
   case detail::syscall_unlink: {
-    auto path = detail::read_c_string(machine, detail::syscall_arg(context, 0));
+    auto path = detail::read_c_string(space, detail::syscall_arg(context, 0));
     if (!path.ok)
       return detail::return_error(context, path.error);
 
@@ -1428,7 +2124,7 @@ std::optional<SyscallResult> SysFileSystem::try_syscall(Machine& machine, Regist
     return detail::return_value(context, 0);
   }
   case detail::syscall_chmod: {
-    auto path = detail::read_c_string(machine, detail::syscall_arg(context, 0));
+    auto path = detail::read_c_string(space, detail::syscall_arg(context, 0));
     if (!path.ok)
       return detail::return_error(context, path.error);
 
@@ -1438,7 +2134,7 @@ std::optional<SyscallResult> SysFileSystem::try_syscall(Machine& machine, Regist
     return detail::return_value(context, 0);
   }
   case detail::syscall_fchmod: {
-    auto fd = detail::checked_fd(detail::syscall_arg(context, 0));
+    auto fd = host_fd_for(context_id, detail::syscall_arg(context, 0));
     if (!fd)
       return detail::return_error(context, detail::linux_ebadf);
 
@@ -1452,7 +2148,7 @@ std::optional<SyscallResult> SysFileSystem::try_syscall(Machine& machine, Regist
     return detail::return_value(context, old_mask);
   }
   case detail::syscall_utime: {
-    auto path = detail::read_c_string(machine, detail::syscall_arg(context, 0));
+    auto path = detail::read_c_string(space, detail::syscall_arg(context, 0));
     if (!path.ok)
       return detail::return_error(context, path.error);
 
@@ -1464,7 +2160,7 @@ std::optional<SyscallResult> SysFileSystem::try_syscall(Machine& machine, Regist
     }
 
     std::array<std::byte, 16> bytes{};
-    if (auto read_error = detail::read_guest_memory(machine, times_address, bytes))
+    if (auto read_error = detail::read_guest_memory(space, times_address, bytes))
       return detail::return_error(context, *read_error);
 
     utimbuf times{};
@@ -1475,11 +2171,11 @@ std::optional<SyscallResult> SysFileSystem::try_syscall(Machine& machine, Regist
     return detail::return_value(context, 0);
   }
   case detail::syscall_mkdirat: {
-    auto dirfd = detail::dirfd_from_linux(detail::syscall_arg(context, 0));
+    auto dirfd = host_dirfd_for(context_id, detail::syscall_arg(context, 0));
     if (!dirfd)
       return detail::return_error(context, detail::linux_ebadf);
 
-    auto path = detail::read_c_string(machine, detail::syscall_arg(context, 1));
+    auto path = detail::read_c_string(space, detail::syscall_arg(context, 1));
     if (!path.ok)
       return detail::return_error(context, path.error);
 
@@ -1489,11 +2185,11 @@ std::optional<SyscallResult> SysFileSystem::try_syscall(Machine& machine, Regist
     return detail::return_value(context, 0);
   }
   case detail::syscall_unlinkat: {
-    auto dirfd = detail::dirfd_from_linux(detail::syscall_arg(context, 0));
+    auto dirfd = host_dirfd_for(context_id, detail::syscall_arg(context, 0));
     if (!dirfd)
       return detail::return_error(context, detail::linux_ebadf);
 
-    auto path = detail::read_c_string(machine, detail::syscall_arg(context, 1));
+    auto path = detail::read_c_string(space, detail::syscall_arg(context, 1));
     if (!path.ok)
       return detail::return_error(context, path.error);
 
@@ -1506,15 +2202,15 @@ std::optional<SyscallResult> SysFileSystem::try_syscall(Machine& machine, Regist
     return detail::return_value(context, 0);
   }
   case detail::syscall_renameat: {
-    auto old_dirfd = detail::dirfd_from_linux(detail::syscall_arg(context, 0));
-    auto new_dirfd = detail::dirfd_from_linux(detail::syscall_arg(context, 2));
+    auto old_dirfd = host_dirfd_for(context_id, detail::syscall_arg(context, 0));
+    auto new_dirfd = host_dirfd_for(context_id, detail::syscall_arg(context, 2));
     if (!old_dirfd || !new_dirfd)
       return detail::return_error(context, detail::linux_ebadf);
 
-    auto old_path = detail::read_c_string(machine, detail::syscall_arg(context, 1));
+    auto old_path = detail::read_c_string(space, detail::syscall_arg(context, 1));
     if (!old_path.ok)
       return detail::return_error(context, old_path.error);
-    auto new_path = detail::read_c_string(machine, detail::syscall_arg(context, 3));
+    auto new_path = detail::read_c_string(space, detail::syscall_arg(context, 3));
     if (!new_path.ok)
       return detail::return_error(context, new_path.error);
 
@@ -1523,11 +2219,11 @@ std::optional<SyscallResult> SysFileSystem::try_syscall(Machine& machine, Regist
     return detail::return_value(context, 0);
   }
   case detail::syscall_faccessat: {
-    auto dirfd = detail::dirfd_from_linux(detail::syscall_arg(context, 0));
+    auto dirfd = host_dirfd_for(context_id, detail::syscall_arg(context, 0));
     if (!dirfd)
       return detail::return_error(context, detail::linux_ebadf);
 
-    auto path = detail::read_c_string(machine, detail::syscall_arg(context, 1));
+    auto path = detail::read_c_string(space, detail::syscall_arg(context, 1));
     if (!path.ok)
       return detail::return_error(context, path.error);
 
@@ -1542,11 +2238,12 @@ std::optional<SyscallResult> SysFileSystem::try_syscall(Machine& machine, Regist
   return std::nullopt;
 }
 
-std::optional<SyscallResult> SysLseek::try_syscall(Machine&, RegisterFile& context, SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysLseek::try_syscall(Machine&, ProcessId context_id, CpuState& context,
+                                                   AddressSpace& space, SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_lseek))
     return std::nullopt;
 
-  const auto fd = detail::checked_fd(detail::syscall_arg(context, 0));
+  const auto fd = host_fd_for(context_id, detail::syscall_arg(context, 0));
   if (!fd)
     return detail::return_error(context, detail::linux_ebadf);
 
@@ -1572,24 +2269,73 @@ std::optional<SyscallResult> SysLseek::try_syscall(Machine&, RegisterFile& conte
   return detail::return_value(context, result);
 }
 
-std::optional<SyscallResult> SysIoctl::try_syscall(Machine&, RegisterFile& context, SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysIoctl::try_syscall(Machine&, ProcessId context_id, CpuState& context,
+                                                   AddressSpace& space, SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_ioctl))
     return std::nullopt;
 
-  const auto fd = detail::checked_fd(detail::syscall_arg(context, 0));
+  const auto fd = host_fd_for(context_id, detail::syscall_arg(context, 0));
   if (!fd)
     return detail::return_error(context, detail::linux_ebadf);
 
   return detail::return_error(context, detail::linux_enotty);
 }
 
-std::optional<SyscallResult> SysFcntl::try_syscall(Machine& machine, RegisterFile& context, SyscallKind kind) noexcept {
-  if (!detail::handles(context, kind, detail::syscall_fcntl))
+std::optional<SyscallResult> SysFcntl::try_syscall(Machine& machine, ProcessId context_id, CpuState& context,
+                                                   AddressSpace& space, SyscallKind kind) noexcept {
+  if (!detail::handles(context, kind, detail::syscall_fcntl) && !detail::handles(context, kind, detail::syscall_dup) &&
+      !detail::handles(context, kind, detail::syscall_dup2) && !detail::handles(context, kind, detail::syscall_dup3))
     return std::nullopt;
 
-  const auto fd = detail::checked_fd(detail::syscall_arg(context, 0));
+  const word_t number = detail::syscall_number(context);
+  const auto fd = host_fd_for(context_id, detail::syscall_arg(context, 0));
   if (!fd)
     return detail::return_error(context, detail::linux_ebadf);
+
+  if (number == detail::syscall_dup) {
+    const int duplicated = dup(*fd);
+    if (duplicated < 0)
+      return detail::return_error(context, detail::host_errno_to_linux(errno));
+    const int guest_fd = install_fd(context_id, duplicated);
+    if (guest_fd < 0) {
+      close(duplicated);
+      return detail::return_error(context, detail::linux_emfile);
+    }
+    copy_pipe_write_mapping(*fd, duplicated);
+    return detail::return_value(context, guest_fd);
+  }
+
+  if (number == detail::syscall_dup2 || number == detail::syscall_dup3) {
+    const auto new_fd = detail::checked_fd(detail::syscall_arg(context, 1));
+    if (!new_fd)
+      return detail::return_error(context, detail::linux_ebadf);
+
+    word_t flags = 0;
+    if (number == detail::syscall_dup3) {
+      flags = detail::syscall_arg(context, 2);
+      if ((flags & ~detail::linux_o_cloexec) != 0)
+        return detail::return_error(context, detail::linux_einval);
+      if (detail::syscall_arg(context, 0) == detail::syscall_arg(context, 1))
+        return detail::return_error(context, detail::linux_einval);
+    }
+    if (number == detail::syscall_dup2 && detail::syscall_arg(context, 0) == detail::syscall_arg(context, 1))
+      return detail::return_value(context, *new_fd);
+
+    const int duplicated = dup(*fd);
+    if (duplicated < 0)
+      return detail::return_error(context, detail::host_errno_to_linux(errno));
+    if ((flags & detail::linux_o_cloexec) != 0 && fcntl(duplicated, F_SETFD, FD_CLOEXEC) < 0) {
+      const int saved_errno = errno;
+      close(duplicated);
+      return detail::return_error(context, detail::host_errno_to_linux(saved_errno));
+    }
+    if (install_fd(context_id, duplicated, *new_fd) < 0) {
+      close(duplicated);
+      return detail::return_error(context, detail::linux_emfile);
+    }
+    copy_pipe_write_mapping(*fd, duplicated);
+    return detail::return_value(context, *new_fd);
+  }
 
   const word_t command = detail::syscall_arg(context, 1);
   const word_t arg = detail::syscall_arg(context, 2);
@@ -1599,7 +2345,8 @@ std::optional<SyscallResult> SysFcntl::try_syscall(Machine& machine, RegisterFil
   case detail::linux_f_dupfd_cloexec: {
     if (arg > static_cast<word_t>(std::numeric_limits<int>::max()))
       return detail::return_error(context, detail::linux_einval);
-    const int duplicated = fcntl(*fd, F_DUPFD, static_cast<int>(arg));
+    const int minimum_guest_fd = static_cast<int>(arg);
+    const int duplicated = dup(*fd);
     if (duplicated < 0)
       return detail::return_error(context, detail::host_errno_to_linux(errno));
     if (command == detail::linux_f_dupfd_cloexec && fcntl(duplicated, F_SETFD, FD_CLOEXEC) < 0) {
@@ -1607,7 +2354,18 @@ std::optional<SyscallResult> SysFcntl::try_syscall(Machine& machine, RegisterFil
       close(duplicated);
       return detail::return_error(context, detail::host_errno_to_linux(saved_errno));
     }
-    return detail::return_value(context, duplicated);
+    const int target_guest_fd = next_guest_fd(context_id, minimum_guest_fd);
+    if (target_guest_fd < 0) {
+      close(duplicated);
+      return detail::return_error(context, detail::linux_emfile);
+    }
+    const int guest_fd = install_fd(context_id, duplicated, target_guest_fd);
+    if (guest_fd < 0) {
+      close(duplicated);
+      return detail::return_error(context, detail::linux_emfile);
+    }
+    copy_pipe_write_mapping(*fd, duplicated);
+    return detail::return_value(context, guest_fd);
   }
   case detail::linux_f_getfd: {
     const int flags = fcntl(*fd, F_GETFD, 0);
@@ -1639,7 +2397,7 @@ std::optional<SyscallResult> SysFcntl::try_syscall(Machine& machine, RegisterFil
   case detail::linux_f_setlk:
   case detail::linux_f_setlkw: {
     int error = 0;
-    auto host_lock = detail::read_flock64(machine, arg, error);
+    auto host_lock = detail::read_flock64(space, arg, error);
     if (!host_lock)
       return detail::return_error(context, error);
 
@@ -1653,7 +2411,7 @@ std::optional<SyscallResult> SysFcntl::try_syscall(Machine& machine, RegisterFil
       return detail::return_error(context, detail::host_errno_to_linux(errno));
 
     if (command == detail::linux_f_getlk) {
-      if (auto write_error = detail::write_flock64(machine, arg, *host_lock))
+      if (auto write_error = detail::write_flock64(space, arg, *host_lock))
         return detail::return_error(context, *write_error);
     }
     return detail::return_value(context, 0);
@@ -1663,7 +2421,8 @@ std::optional<SyscallResult> SysFcntl::try_syscall(Machine& machine, RegisterFil
   }
 }
 
-std::optional<SyscallResult> SysSocket::try_syscall(Machine&, RegisterFile& context, SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysSocket::try_syscall(Machine&, ProcessId context_id, CpuState& context,
+                                                    AddressSpace& space, SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_socket))
     return std::nullopt;
 
@@ -1706,15 +2465,20 @@ std::optional<SyscallResult> SysSocket::try_syscall(Machine&, RegisterFile& cont
     }
   }
 
-  return detail::return_value(context, fd);
+  const int guest_fd = install_fd(context_id, fd);
+  if (guest_fd < 0) {
+    close(fd);
+    return detail::return_error(context, detail::linux_emfile);
+  }
+  return detail::return_value(context, guest_fd);
 }
 
-std::optional<SyscallResult> SysConnect::try_syscall(Machine& machine, RegisterFile& context,
-                                                     SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysConnect::try_syscall(Machine& machine, ProcessId context_id, CpuState& context,
+                                                     AddressSpace& space, SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_connect))
     return std::nullopt;
 
-  const auto fd = detail::checked_fd(detail::syscall_arg(context, 0));
+  const auto fd = host_fd_for(context_id, detail::syscall_arg(context, 0));
   if (!fd)
     return detail::return_error(context, detail::linux_ebadf);
 
@@ -1725,7 +2489,7 @@ std::optional<SyscallResult> SysConnect::try_syscall(Machine& machine, RegisterF
 
   try {
     std::vector<std::byte> bytes(static_cast<std::size_t>(length));
-    auto read = machine.read_memory_into(address, bytes);
+    auto read = space.read(address, bytes);
     if (!read)
       return detail::return_error(context, detail::memory_error_to_linux(read.error()));
 
@@ -1800,8 +2564,8 @@ std::optional<SyscallResult> SysConnect::try_syscall(Machine& machine, RegisterF
   }
 }
 
-std::optional<SyscallResult> SysSelect::try_syscall(Machine& machine, RegisterFile& context,
-                                                    SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysSelect::try_syscall(Machine& machine, ProcessId context_id, CpuState& context,
+                                                    AddressSpace& space, SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_select))
     return std::nullopt;
 
@@ -1823,7 +2587,7 @@ std::optional<SyscallResult> SysSelect::try_syscall(Machine& machine, RegisterFi
 
   if (timeout_address != 0) {
     std::array<std::byte, 16> bytes{};
-    if (auto read_error = detail::read_guest_memory(machine, timeout_address, bytes))
+    if (auto read_error = detail::read_guest_memory(space, timeout_address, bytes))
       return detail::return_error(context, *read_error);
 
     timespec requested{};
@@ -1838,7 +2602,8 @@ std::optional<SyscallResult> SysSelect::try_syscall(Machine& machine, RegisterFi
   return detail::return_value(context, 0);
 }
 
-std::optional<SyscallResult> SysProcess::try_syscall(Machine&, RegisterFile& context, SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysProcess::try_syscall(Machine& machine, ProcessId context_id, CpuState& context,
+                                                     AddressSpace& space, SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_clone) && !detail::handles(context, kind, detail::syscall_fork) &&
       !detail::handles(context, kind, detail::syscall_vfork) &&
       !detail::handles(context, kind, detail::syscall_execve) &&
@@ -1846,12 +2611,23 @@ std::optional<SyscallResult> SysProcess::try_syscall(Machine&, RegisterFile& con
     return std::nullopt;
   }
 
-  if (detail::syscall_number(context) == detail::syscall_wait4)
+  const word_t number = detail::syscall_number(context);
+
+  // Phase 1 runs a single process. fork/clone/vfork/execve/wait4 all require the
+  // multi-process scheduler that Phase 2 rebuilds on top of run(CpuState&,
+  // AddressSpace&); until then they degrade to single-process behavior.
+  // TODO(phase2): restore real fork/exec/wait once the support library owns the
+  // process table + scheduler.
+  (void)machine;
+  (void)context_id;
+  (void)space;
+  if (number == detail::syscall_wait4)
     return detail::return_error(context, detail::linux_echild);
   return detail::return_error(context, detail::linux_enosys);
 }
 
-std::optional<SyscallResult> SysFutex::try_syscall(Machine& machine, RegisterFile& context, SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysFutex::try_syscall(Machine& machine, ProcessId context_id, CpuState& context,
+                                                   AddressSpace& space, SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_futex))
     return std::nullopt;
 
@@ -1868,7 +2644,7 @@ std::optional<SyscallResult> SysFutex::try_syscall(Machine& machine, RegisterFil
       return detail::return_error(context, detail::linux_efault);
 
     std::array<std::byte, 4> bytes{};
-    if (auto read_error = detail::read_guest_memory(machine, uaddr, bytes))
+    if (auto read_error = detail::read_guest_memory(space, uaddr, bytes))
       return detail::return_error(context, *read_error);
 
     const auto current = static_cast<std::uint32_t>(detail::read_le(bytes, 0, 4));
@@ -1888,7 +2664,8 @@ std::optional<SyscallResult> SysFutex::try_syscall(Machine& machine, RegisterFil
   }
 }
 
-std::optional<SyscallResult> SysSignals::try_syscall(Machine&, RegisterFile& context, SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysSignals::try_syscall(Machine&, ProcessId, CpuState& context, AddressSpace& space,
+                                                     SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_rt_sigaction) &&
       !detail::handles(context, kind, detail::syscall_rt_sigprocmask)) {
     return std::nullopt;
@@ -1897,52 +2674,58 @@ std::optional<SyscallResult> SysSignals::try_syscall(Machine&, RegisterFile& con
   return detail::return_value(context, 0);
 }
 
-std::optional<SyscallResult> SysBrk::try_syscall(Machine& machine, RegisterFile& context, SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysBrk::try_syscall(Machine& machine, ProcessId context_id, CpuState& context,
+                                                 AddressSpace& space, SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_brk))
     return std::nullopt;
 
+  BrkState& state = brk_state(context_id, initial_break);
   const address_t requested_break = detail::syscall_arg(context, 0);
   if (requested_break == 0)
-    return detail::return_value(context, static_cast<std::int64_t>(current_break));
-  if (requested_break < minimum_break)
-    return detail::return_value(context, static_cast<std::int64_t>(current_break));
+    return detail::return_value(context, static_cast<std::int64_t>(state.current_break));
+  if (requested_break < state.minimum_break)
+    return detail::return_value(context, static_cast<std::int64_t>(state.current_break));
 
   auto requested_end = detail::page_align_up(requested_break);
   if (!requested_end)
-    return detail::return_value(context, static_cast<std::int64_t>(current_break));
+    return detail::return_value(context, static_cast<std::int64_t>(state.current_break));
 
-  if (*requested_end > mapped_end) {
-    auto mapped = machine.map(mapped_end, *requested_end - mapped_end, Protection::read | Protection::write);
+  if (*requested_end > state.mapped_end) {
+    auto mapped = space.map(state.mapped_end, *requested_end - state.mapped_end, Protection::read | Protection::write);
     if (!mapped)
-      return detail::return_value(context, static_cast<std::int64_t>(current_break));
-    mapped_end = *requested_end;
+      return detail::return_value(context, static_cast<std::int64_t>(state.current_break));
+    state.mapped_end = *requested_end;
   }
 
-  current_break = requested_break;
-  return detail::return_value(context, static_cast<std::int64_t>(current_break));
+  state.current_break = requested_break;
+  return detail::return_value(context, static_cast<std::int64_t>(state.current_break));
 }
 
-std::optional<SyscallResult> SysArchPrctl::try_syscall(Machine& machine, RegisterFile& context,
-                                                       SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysArchPrctl::try_syscall(Machine& machine, ProcessId context_id, CpuState& context,
+                                                       AddressSpace& space, SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_arch_prctl))
     return std::nullopt;
 
   const word_t code = detail::syscall_arg(context, 0);
   const address_t address = detail::syscall_arg(context, 1);
 
+  // Segment bases live directly in the CpuState the caller owns; arch_prctl just
+  // reads/writes them.
+  constexpr auto fs = segment_register_index(SegmentRegister::fs);
+  constexpr auto gs = segment_register_index(SegmentRegister::gs);
   switch (code) {
   case detail::linux_arch_set_fs:
-    machine.set_segment_base(context, SegmentRegister::fs, address);
+    context.segment_bases[fs] = address;
     return detail::return_value(context, 0);
   case detail::linux_arch_set_gs:
-    machine.set_segment_base(context, SegmentRegister::gs, address);
+    context.segment_bases[gs] = address;
     return detail::return_value(context, 0);
   case detail::linux_arch_get_fs:
-    if (auto error = detail::write_word(machine, address, machine.segment_base(context, SegmentRegister::fs)))
+    if (auto error = detail::write_word(space, address, context.segment_bases[fs]))
       return detail::return_error(context, *error);
     return detail::return_value(context, 0);
   case detail::linux_arch_get_gs:
-    if (auto error = detail::write_word(machine, address, machine.segment_base(context, SegmentRegister::gs)))
+    if (auto error = detail::write_word(space, address, context.segment_bases[gs]))
       return detail::return_error(context, *error);
     return detail::return_value(context, 0);
   default:
@@ -1950,7 +2733,8 @@ std::optional<SyscallResult> SysArchPrctl::try_syscall(Machine& machine, Registe
   }
 }
 
-std::optional<SyscallResult> SysGetIdentity::try_syscall(Machine&, RegisterFile& context, SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysGetIdentity::try_syscall(Machine&, ProcessId context_id, CpuState& context,
+                                                         AddressSpace& space, SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_getpid) &&
       !detail::handles(context, kind, detail::syscall_gettid) &&
       !detail::handles(context, kind, detail::syscall_getuid) &&
@@ -1963,7 +2747,7 @@ std::optional<SyscallResult> SysGetIdentity::try_syscall(Machine&, RegisterFile&
   switch (detail::syscall_number(context)) {
   case detail::syscall_getpid:
   case detail::syscall_gettid:
-    return detail::return_value(context, detail::synthetic_pid);
+    return detail::return_value(context, static_cast<std::int64_t>(context_id));
   case detail::syscall_getuid:
   case detail::syscall_geteuid:
     return detail::return_value(context, detail::synthetic_uid);
@@ -1975,7 +2759,8 @@ std::optional<SyscallResult> SysGetIdentity::try_syscall(Machine&, RegisterFile&
   }
 }
 
-std::optional<SyscallResult> SysUname::try_syscall(Machine& machine, RegisterFile& context, SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysUname::try_syscall(Machine& machine, ProcessId context_id, CpuState& context,
+                                                   AddressSpace& space, SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_uname))
     return std::nullopt;
 
@@ -1988,14 +2773,14 @@ std::optional<SyscallResult> SysUname::try_syscall(Machine& machine, RegisterFil
   detail::copy_c_string(utsname, field_size * 4, "x86_64");
   detail::copy_c_string(utsname, field_size * 5, "localdomain");
 
-  auto written = machine.write_memory(detail::syscall_arg(context, 0), utsname);
+  auto written = space.write(detail::syscall_arg(context, 0), utsname);
   if (!written)
     return detail::return_error(context, detail::memory_error_to_linux(written.error()));
   return detail::return_value(context, 0);
 }
 
-std::optional<SyscallResult> SysGetcwd::try_syscall(Machine& machine, RegisterFile& context,
-                                                    SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysGetcwd::try_syscall(Machine& machine, ProcessId context_id, CpuState& context,
+                                                    AddressSpace& space, SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_getcwd))
     return std::nullopt;
 
@@ -2015,7 +2800,7 @@ std::optional<SyscallResult> SysGetcwd::try_syscall(Machine& machine, RegisterFi
 
     std::vector<std::byte> bytes(cwd.size() + 1);
     std::memcpy(bytes.data(), cwd.data(), cwd.size());
-    auto written = machine.write_memory(buffer_address, bytes);
+    auto written = space.write(buffer_address, bytes);
     if (!written)
       return detail::return_error(context, detail::memory_error_to_linux(written.error()));
     return detail::return_value(context, static_cast<std::int64_t>(cwd.size() + 1));
@@ -2026,7 +2811,8 @@ std::optional<SyscallResult> SysGetcwd::try_syscall(Machine& machine, RegisterFi
   }
 }
 
-std::optional<SyscallResult> SysTime::try_syscall(Machine& machine, RegisterFile& context, SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysTime::try_syscall(Machine& machine, ProcessId context_id, CpuState& context,
+                                                  AddressSpace& space, SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_gettimeofday) &&
       !detail::handles(context, kind, detail::syscall_nanosleep) &&
       !detail::handles(context, kind, detail::syscall_getrusage) &&
@@ -2041,7 +2827,7 @@ std::optional<SyscallResult> SysTime::try_syscall(Machine& machine, RegisterFile
       return detail::return_error(context, detail::linux_efault);
 
     std::array<std::byte, 16> bytes{};
-    if (auto read_error = detail::read_guest_memory(machine, request_address, bytes))
+    if (auto read_error = detail::read_guest_memory(space, request_address, bytes))
       return detail::return_error(context, *read_error);
 
     timespec request{};
@@ -2061,7 +2847,7 @@ std::optional<SyscallResult> SysTime::try_syscall(Machine& machine, RegisterFile
       return detail::return_value(context, 0);
 
     std::array<std::byte, 144> bytes{};
-    (void)machine.write_memory(usage_address, bytes);
+    (void)space.write(usage_address, bytes);
     return detail::return_value(context, 0);
   }
 
@@ -2075,7 +2861,7 @@ std::optional<SyscallResult> SysTime::try_syscall(Machine& machine, RegisterFile
       std::array<std::byte, 16> bytes{};
       detail::write_le(bytes, 0, static_cast<std::uint64_t>(tv.tv_sec), 8);
       detail::write_le(bytes, 8, static_cast<std::uint64_t>(tv.tv_usec), 8);
-      auto written = machine.write_memory(timeval_address, bytes);
+      auto written = space.write(timeval_address, bytes);
       if (!written)
         return detail::return_error(context, detail::memory_error_to_linux(written.error()));
     }
@@ -2083,7 +2869,7 @@ std::optional<SyscallResult> SysTime::try_syscall(Machine& machine, RegisterFile
     const address_t timezone_address = detail::syscall_arg(context, 1);
     if (timezone_address != 0) {
       std::array<std::byte, 8> bytes{};
-      auto written = machine.write_memory(timezone_address, bytes);
+      auto written = space.write(timezone_address, bytes);
       if (!written)
         return detail::return_error(context, detail::memory_error_to_linux(written.error()));
     }
@@ -2101,40 +2887,43 @@ std::optional<SyscallResult> SysTime::try_syscall(Machine& machine, RegisterFile
   std::array<std::byte, 16> bytes{};
   detail::write_le(bytes, 0, static_cast<std::uint64_t>(ts.tv_sec), 8);
   detail::write_le(bytes, 8, static_cast<std::uint64_t>(ts.tv_nsec), 8);
-  auto written = machine.write_memory(timespec_address, bytes);
+  auto written = space.write(timespec_address, bytes);
   if (!written)
     return detail::return_error(context, detail::memory_error_to_linux(written.error()));
   return detail::return_value(context, 0);
 }
 
-std::optional<SyscallResult> SysSetTidAddress::try_syscall(Machine&, RegisterFile& context, SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysSetTidAddress::try_syscall(Machine&, ProcessId, CpuState& context, AddressSpace& space,
+                                                           SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_set_tid_address))
     return std::nullopt;
 
   return detail::return_value(context, 1);
 }
 
-std::optional<SyscallResult> SysSetRobustList::try_syscall(Machine&, RegisterFile& context, SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysSetRobustList::try_syscall(Machine&, ProcessId, CpuState& context, AddressSpace& space,
+                                                           SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_set_robust_list))
     return std::nullopt;
 
   return detail::return_value(context, 0);
 }
 
-std::optional<SyscallResult> SysRseq::try_syscall(Machine&, RegisterFile& context, SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysRseq::try_syscall(Machine&, ProcessId, CpuState& context, AddressSpace& space,
+                                                  SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_rseq))
     return std::nullopt;
 
   return detail::return_error(context, detail::linux_enosys);
 }
 
-std::optional<SyscallResult> SysPrlimit64::try_syscall(Machine& machine, RegisterFile& context,
-                                                       SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysPrlimit64::try_syscall(Machine& machine, ProcessId context_id, CpuState& context,
+                                                       AddressSpace& space, SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_prlimit64))
     return std::nullopt;
 
   const word_t pid = detail::syscall_arg(context, 0);
-  if (pid != 0 && pid != detail::synthetic_pid)
+  if (pid != 0 && pid != context_id)
     return detail::return_error(context, detail::linux_esrch);
 
   const word_t resource = detail::syscall_arg(context, 1);
@@ -2151,7 +2940,7 @@ std::optional<SyscallResult> SysPrlimit64::try_syscall(Machine& machine, Registe
       return detail::return_error(context, detail::linux_efault);
 
     std::array<std::byte, 16> bytes{};
-    if (auto read_error = detail::read_guest_memory(machine, new_limit_address, bytes))
+    if (auto read_error = detail::read_guest_memory(space, new_limit_address, bytes))
       return detail::return_error(context, *read_error);
 
     new_limit = detail::read_rlimit64(bytes);
@@ -2162,7 +2951,7 @@ std::optional<SyscallResult> SysPrlimit64::try_syscall(Machine& machine, Registe
   if (old_limit_address != 0) {
     if (detail::range_overflows(old_limit_address, 16))
       return detail::return_error(context, detail::linux_efault);
-    if (auto error = detail::write_rlimit64(machine, old_limit_address, old_limit))
+    if (auto error = detail::write_rlimit64(space, old_limit_address, old_limit))
       return detail::return_error(context, *error);
   }
 
@@ -2172,27 +2961,52 @@ std::optional<SyscallResult> SysPrlimit64::try_syscall(Machine& machine, Registe
   return detail::return_value(context, 0);
 }
 
-std::optional<SyscallResult> SysExit::try_syscall(Machine&, RegisterFile& context, SyscallKind kind) noexcept {
+namespace {
+
+[[nodiscard]] bool wait_matches(std::int64_t requested_pid, ProcessId child) noexcept {
+  return requested_pid <= 0 || static_cast<ProcessId>(requested_pid) == child;
+}
+
+// Phase 1 never has a parent/child relationship (fork is disabled), so this is
+// never reached; it is kept as the seam where Phase 2's scheduler will deliver a
+// child's exit status to a waiting parent process.
+// TODO(phase2): reinstate parent notification / wait wakeup on the scheduler.
+void publish_child_exit(Machine&, ProcessTable&, ProcessId, int) {}
+
+} // namespace
+
+std::optional<SyscallResult> SysExit::try_syscall(Machine& machine, ProcessId context_id, CpuState& context,
+                                                  AddressSpace& space, SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_exit))
     return std::nullopt;
 
   const int status = static_cast<int>(detail::syscall_arg(context, 0) & 0xff);
+  if (processes->parent.contains(context_id)) {
+    publish_child_exit(machine, *processes, context_id, status);
+    return detail::return_value(context, 0);
+  }
   if (exit_status)
     *exit_status = status;
   return SyscallResult{.reason = StopReason::guest_exit, .continue_execution = false, .message = {}};
 }
 
-std::optional<SyscallResult> SysExitGroup::try_syscall(Machine&, RegisterFile& context, SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysExitGroup::try_syscall(Machine& machine, ProcessId context_id, CpuState& context,
+                                                       AddressSpace& space, SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_exit_group))
     return std::nullopt;
 
   const int status = static_cast<int>(detail::syscall_arg(context, 0) & 0xff);
+  if (processes->parent.contains(context_id)) {
+    publish_child_exit(machine, *processes, context_id, status);
+    return detail::return_value(context, 0);
+  }
   if (exit_status)
     *exit_status = status;
   return SyscallResult{.reason = StopReason::guest_exit, .continue_execution = false, .message = {}};
 }
 
-std::optional<SyscallResult> SysMmap::try_syscall(Machine& machine, RegisterFile& context, SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysMmap::try_syscall(Machine& machine, ProcessId context_id, CpuState& context,
+                                                  AddressSpace& space, SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_mmap))
     return std::nullopt;
 
@@ -2241,19 +3055,19 @@ std::optional<SyscallResult> SysMmap::try_syscall(Machine& machine, RegisterFile
   if (mapped_address > std::numeric_limits<address_t>::max() - *aligned_length)
     return detail::return_error(context, detail::linux_einval);
 
-  auto mapped = machine.map(mapped_address, *aligned_length, *protection);
+  auto mapped = space.map(mapped_address, *aligned_length, *protection);
   if (!mapped)
     return detail::return_error(context, detail::memory_error_to_linux(mapped.error()));
 
   if ((flags & detail::linux_map_anonymous) == 0) {
-    const auto fd = detail::checked_fd(detail::syscall_arg(context, 4));
+    const auto fd = host_fd_for(context_id, detail::syscall_arg(context, 4));
     if (!fd) {
-      machine.unmap(mapped_address, *aligned_length);
+      space.unmap(mapped_address, *aligned_length);
       return detail::return_error(context, detail::linux_ebadf);
     }
 
     try {
-      std::array<std::byte, Machine::kPageSize> buffer{};
+      std::array<std::byte, AddressSpace::kPageSize> buffer{};
       word_t total = 0;
       while (total < length) {
         const auto chunk_size =
@@ -2261,22 +3075,22 @@ std::optional<SyscallResult> SysMmap::try_syscall(Machine& machine, RegisterFile
         const ssize_t bytes_read = pread(*fd, buffer.data(), chunk_size, static_cast<off_t>(offset + total));
         if (bytes_read < 0) {
           const int saved_errno = errno;
-          machine.unmap(mapped_address, *aligned_length);
+          space.unmap(mapped_address, *aligned_length);
           return detail::return_error(context, detail::host_errno_to_linux(saved_errno));
         }
         if (bytes_read == 0)
           break;
 
-        auto written = machine.write_memory(
-            mapped_address + total, std::span<const std::byte>(buffer.data(), static_cast<std::size_t>(bytes_read)));
+        auto written = space.write(mapped_address + total,
+                                   std::span<const std::byte>(buffer.data(), static_cast<std::size_t>(bytes_read)));
         if (!written) {
-          machine.unmap(mapped_address, *aligned_length);
+          space.unmap(mapped_address, *aligned_length);
           return detail::return_error(context, detail::memory_error_to_linux(written.error()));
         }
         total += static_cast<word_t>(bytes_read);
       }
     } catch (...) {
-      machine.unmap(mapped_address, *aligned_length);
+      space.unmap(mapped_address, *aligned_length);
       return detail::return_error(context, detail::linux_eio);
     }
   }
@@ -2284,8 +3098,8 @@ std::optional<SyscallResult> SysMmap::try_syscall(Machine& machine, RegisterFile
   return detail::return_value(context, static_cast<std::int64_t>(mapped_address));
 }
 
-std::optional<SyscallResult> SysMunmap::try_syscall(Machine& machine, RegisterFile& context,
-                                                    SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysMunmap::try_syscall(Machine& machine, ProcessId context_id, CpuState& context,
+                                                    AddressSpace& space, SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_munmap))
     return std::nullopt;
 
@@ -2298,12 +3112,12 @@ std::optional<SyscallResult> SysMunmap::try_syscall(Machine& machine, RegisterFi
   if (!aligned_length)
     return detail::return_error(context, detail::linux_einval);
 
-  machine.unmap(address, *aligned_length);
+  space.unmap(address, *aligned_length);
   return detail::return_value(context, 0);
 }
 
-std::optional<SyscallResult> SysMremap::try_syscall(Machine& machine, RegisterFile& context,
-                                                    SyscallKind kind) noexcept {
+std::optional<SyscallResult> SysMremap::try_syscall(Machine& machine, ProcessId context_id, CpuState& context,
+                                                    AddressSpace& space, SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_mremap))
     return std::nullopt;
 
@@ -2335,21 +3149,21 @@ std::optional<SyscallResult> SysMremap::try_syscall(Machine& machine, RegisterFi
     const word_t copy_length = std::min(*old_length, *new_length);
     std::vector<std::byte> copied(static_cast<std::size_t>(copy_length));
     if (copy_length != 0) {
-      auto read = machine.read_memory_into(old_address, copied);
+      auto read = space.read(old_address, copied);
       if (!read)
         return detail::return_error(context, detail::memory_error_to_linux(read.error()));
     }
 
     if (*new_length <= *old_length) {
-      machine.unmap(old_address + *new_length, *old_length - *new_length);
+      space.unmap(old_address + *new_length, *old_length - *new_length);
       return detail::return_value(context, static_cast<std::int64_t>(old_address));
     }
 
     const address_t old_end = old_address + *old_length;
     const word_t growth = *new_length - *old_length;
     if (old_end <= std::numeric_limits<address_t>::max() - growth &&
-        detail::range_is_unmapped(machine, old_end, growth)) {
-      auto mapped = machine.map(old_end, growth, Protection::read | Protection::write);
+        detail::range_is_unmapped(space, old_end, growth)) {
+      auto mapped = space.map(old_end, growth, Protection::read | Protection::write);
       if (mapped)
         return detail::return_value(context, static_cast<std::int64_t>(old_address));
     }
@@ -2361,29 +3175,29 @@ std::optional<SyscallResult> SysMremap::try_syscall(Machine& machine, RegisterFi
     if ((flags & detail::linux_mremap_fixed) != 0) {
       if (!detail::page_aligned(fixed_address))
         return detail::return_error(context, detail::linux_einval);
-      if (!detail::range_is_unmapped(machine, fixed_address, *new_length))
-        machine.unmap(fixed_address, *new_length);
+      if (!detail::range_is_unmapped(space, fixed_address, *new_length))
+        space.unmap(fixed_address, *new_length);
       new_address = fixed_address;
     } else {
-      auto allocated = detail::find_unmapped_range(machine, next_mapping_address, *new_length);
+      auto allocated = detail::find_unmapped_range(space, next_mapping_address, *new_length);
       if (!allocated)
         return detail::return_error(context, detail::linux_enomem);
       new_address = *allocated;
     }
 
-    auto mapped = machine.map(new_address, *new_length, Protection::read | Protection::write);
+    auto mapped = space.map(new_address, *new_length, Protection::read | Protection::write);
     if (!mapped)
       return detail::return_error(context, detail::memory_error_to_linux(mapped.error()));
 
     if (!copied.empty()) {
-      auto written = machine.write_memory(new_address, copied);
+      auto written = space.write(new_address, copied);
       if (!written) {
-        machine.unmap(new_address, *new_length);
+        space.unmap(new_address, *new_length);
         return detail::return_error(context, detail::memory_error_to_linux(written.error()));
       }
     }
 
-    machine.unmap(old_address, *old_length);
+    space.unmap(old_address, *old_length);
     return detail::return_value(context, static_cast<std::int64_t>(new_address));
   } catch (const std::bad_alloc&) {
     return detail::return_error(context, detail::linux_enomem);

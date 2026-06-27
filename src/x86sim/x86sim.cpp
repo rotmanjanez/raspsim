@@ -1,13 +1,13 @@
 #include "x86sim/x86sim.hpp"
 
-#include "addrspace.h"
+#include "x86sim/addrspace.hpp"
 #include "ooocore.h"
 #include "ptlhwdef.h"
 #include "ptlsim.h"
 #include "ptlsim-api.h"
 #include "seqcore.h"
 #include "stats.h"
-#include "x86sim/logging.h"
+#include "x86sim/logging.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -31,14 +31,6 @@ namespace {
   default:
     throw std::runtime_error("unknown syscall semantics");
   }
-}
-
-[[nodiscard]] Context& context_from_register_file(RegisterFile& registers) noexcept {
-  return static_cast<Context&>(registers);
-}
-
-[[nodiscard]] const Context& context_from_register_file(const RegisterFile& registers) noexcept {
-  return static_cast<const Context&>(registers);
 }
 
 void advance_default_syscall_rip_if_unchanged(Context& context, SyscallKind kind, W64 old_rip) noexcept {
@@ -72,8 +64,8 @@ W64 storemask(Waddr addr, W64 data, byte bytemask) {
 
 int Context::copy_from_user(void* target, Waddr addr, int bytes, PageFaultErrorCode& pfec, Waddr& faultaddr,
                             bool forexec, Level1PTE& ptelo, Level1PTE& ptehi) {
-  assert(machine);
-  AddressSpace& asp = machine->address_space();
+  assert(address_space);
+  AddressSpace& asp = *address_space;
   logging::println("VMEM: Read from user {} ({})", reinterpret_cast<void*>(addr), bytes);
   logging::flush();
 
@@ -82,10 +74,10 @@ int Context::copy_from_user(void* target, Waddr addr, int bytes, PageFaultErrorC
   ptelo = 0;
   ptehi = 0;
 
-  bool readable = asp.fastcheck(reinterpret_cast<byte*>(addr), asp.readmap);
+  bool readable = asp.check(addr, Protection::read);
   bool executable = true;
   if likely (forexec)
-    executable = asp.fastcheck(reinterpret_cast<byte*>(addr), asp.execmap);
+    executable = asp.check(addr, Protection::execute);
 
   if unlikely ((!readable) | (forexec & !executable)) {
     faultaddr = addr;
@@ -107,10 +99,10 @@ int Context::copy_from_user(void* target, Waddr addr, int bytes, PageFaultErrorC
   if likely (n == bytes)
     return n;
 
-  readable = asp.fastcheck(reinterpret_cast<byte*>(addr + n), asp.readmap);
+  readable = asp.check(addr + n, Protection::read);
   executable = true;
   if likely (forexec)
-    executable = asp.fastcheck(reinterpret_cast<byte*>(addr + n), asp.execmap);
+    executable = asp.check(addr + n, Protection::execute);
 
   if unlikely ((!readable) | (forexec & !executable)) {
     faultaddr = addr + n;
@@ -125,16 +117,16 @@ int Context::copy_from_user(void* target, Waddr addr, int bytes, PageFaultErrorC
 }
 
 int Context::copy_to_user(Waddr target, void* source, int bytes, PageFaultErrorCode& pfec, Waddr& faultaddr) {
-  assert(machine);
-  AddressSpace& asp = machine->address_space();
+  assert(address_space);
+  AddressSpace& asp = *address_space;
   logging::println("VMEM: Write to user {} ({})", reinterpret_cast<void*>(target), bytes);
   logging::flush();
 
   pfec = 0;
-  bool writable = asp.fastcheck(reinterpret_cast<byte*>(target), asp.writemap);
+  bool writable = asp.check(target, Protection::write);
   if unlikely (!writable) {
     faultaddr = target;
-    pfec.p = asp.fastcheck(reinterpret_cast<byte*>(target), asp.readmap);
+    pfec.p = asp.check(target, Protection::read);
     pfec.rw = 1;
     return 0;
   }
@@ -149,10 +141,10 @@ int Context::copy_to_user(Waddr target, void* source, int bytes, PageFaultErrorC
     return bytes;
   }
 
-  writable = asp.fastcheck(reinterpret_cast<byte*>(target + nlo), asp.writemap);
+  writable = asp.check(target + nlo, Protection::write);
   if unlikely (!writable) {
     faultaddr = target + nlo;
-    pfec.p = asp.fastcheck(reinterpret_cast<byte*>(target + nlo), asp.readmap);
+    pfec.p = asp.check(target + nlo, Protection::read);
     pfec.rw = 1;
     pfec.us = 1;
     return nlo;
@@ -167,8 +159,8 @@ int Context::copy_to_user(Waddr target, void* source, int bytes, PageFaultErrorC
 
 Waddr Context::check_and_translate(Waddr virtaddr, int sizeshift, bool store, bool internal, int& exception,
                                    PageFaultErrorCode& pfec, PTEUpdate& pteupdate, Level1PTE& pteused) {
-  assert(machine);
-  AddressSpace& asp = machine->address_space();
+  assert(address_space);
+  AddressSpace& asp = *address_space;
   exception = 0;
   pteupdate = 0;
   pteused = 0;
@@ -182,10 +174,9 @@ Waddr Context::check_and_translate(Waddr virtaddr, int sizeshift, bool store, bo
   if unlikely (internal)
     return virtaddr;
 
-  AddressSpace::spat_t top = store ? asp.writemap : asp.readmap;
-  if unlikely (!asp.fastcheck(virtaddr, top)) {
+  if unlikely (!asp.check(virtaddr, store ? Protection::write : Protection::read)) {
     exception = store ? EXCEPTION_PageFaultOnWrite : EXCEPTION_PageFaultOnRead;
-    pfec.p = asp.fastcheck(virtaddr, asp.readmap);
+    pfec.p = asp.check(virtaddr, Protection::read);
     pfec.rw = store;
     pfec.us = 1;
     return 0;
@@ -199,18 +190,31 @@ int Context::write_segreg(unsigned int, W16) {
 }
 
 void Context::update_shadow_segment_descriptors() {
-  W64 limit = use64 ? 0xffffffffffffffffULL : 0xffffffffULL;
+  // Userspace always runs with flat segments; the only derived quantity is the
+  // virtual address mask, which depends on the active code size.
+  virt_addr_mask = use64 ? 0xffffffffffffffffULL : 0xffffffffULL;
+}
 
-  for (SegmentDescriptorCache* seg_cache :
-       {&seg[segment_register_index(SegmentRegister::cs)], &seg[segment_register_index(SegmentRegister::ss)],
-        &seg[segment_register_index(SegmentRegister::ds)], &seg[segment_register_index(SegmentRegister::es)],
-        &seg[segment_register_index(SegmentRegister::fs)], &seg[segment_register_index(SegmentRegister::gs)]}) {
-    seg_cache->present = 1;
-    seg_cache->base = 0;
-    seg_cache->limit = limit;
+void Context::load_cpu_state(const CpuState& state) {
+  static_cast<CpuState&>(*this) = state;
+  // REG_ctx and REG_fpstack are part of the register file and were copied
+  // verbatim from the snapshot; repoint them at this context's own storage.
+  commitarf[REG_ctx] = reinterpret_cast<Waddr>(this);
+  commitarf[REG_fpstack] = reinterpret_cast<Waddr>(fpstack.data());
+}
+
+CpuState Context::syscall_return_state(SyscallKind kind) const {
+  CpuState state = to_cpu_state();
+  switch (kind) {
+  case SyscallKind::int80:
+  case SyscallKind::sysenter:
+    state[Register::rip] = commitarf[REG_nextrip];
+    break;
+  case SyscallKind::syscall64:
+    state[Register::rip] = commitarf[REG_rcx];
+    break;
   }
-
-  virt_addr_mask = limit;
+  return state;
 }
 
 RIPVirtPhys& RIPVirtPhys::update(Context& ctx, int bytes) {
@@ -229,8 +233,7 @@ void assist_ptlcall(Context& ctx) {
   ctx.commitarf[REG_rip] = ctx.commitarf[REG_nextrip];
 }
 
-Machine::Machine(HostCallbacks& callbacks, Options options)
-    : callbacks_(callbacks), options_(std::move(options)), address_space_(std::make_unique<AddressSpace>()) {
+Machine::Machine(HostCallbacks& callbacks, Options options) : callbacks_(callbacks), options_(std::move(options)) {
   init_uops();
 
   handle_config_change(options_, 0, nullptr);
@@ -247,64 +250,11 @@ Machine::Machine(HostCallbacks& callbacks, Options options)
 
 Machine::~Machine() = default;
 
-std::expected<void, MemoryError> Machine::map(address_t start, std::uint64_t size, Protection prot) noexcept {
-  if (size == 0)
-    return std::unexpected(MemoryError::zero_size);
+RunResult Machine::run(CpuState& state, AddressSpace& space, RunOptions options) {
+  machine_->pending_stop.reset();
 
-  try {
-    address_space_->map(start, size, prot);
-  } catch (const std::bad_alloc&) {
-    return std::unexpected(MemoryError::out_of_memory);
-  } catch (...) {
-    return std::unexpected(MemoryError::mapping_failed);
-  }
-  return {};
-}
-
-void Machine::unmap(address_t start, std::uint64_t size) noexcept {
-  if (size == 0)
-    return;
-  address_space_->unmap(start, size);
-}
-
-std::expected<void, MemoryError> Machine::read_memory_into(address_t start, std::span<std::byte> out) const noexcept {
-  if (out.empty())
-    return std::unexpected(MemoryError::zero_size);
-
-  std::uint64_t processed = 0;
-  while (processed < out.size()) {
-    address_t addr = start + processed;
-    const auto* src = static_cast<const std::byte*>(address_space_->page_virt_to_mapped(addr));
-    if (!src)
-      return std::unexpected(MemoryError::unmapped_address);
-
-    auto chunk = std::min<std::uint64_t>(out.size() - processed, kPageSize - (addr & (kPageSize - 1)));
-    std::memcpy(out.data() + processed, src, chunk);
-    processed += chunk;
-  }
-  return {};
-}
-
-std::expected<void, MemoryError> Machine::write_memory(address_t start, std::span<const std::byte> bytes) noexcept {
-  if (bytes.empty())
-    return std::unexpected(MemoryError::zero_size);
-
-  std::uint64_t processed = 0;
-  while (processed < bytes.size()) {
-    address_t addr = start + processed;
-    auto* dst = static_cast<std::byte*>(address_space_->page_virt_to_mapped(addr));
-    if (!dst)
-      return std::unexpected(MemoryError::unmapped_address);
-
-    auto chunk = std::min<std::uint64_t>(bytes.size() - processed, kPageSize - (addr & (kPageSize - 1)));
-    std::memcpy(dst, bytes.data() + processed, chunk);
-    processed += chunk;
-  }
-  return {};
-}
-
-RunResult Machine::run(RunOptions options) {
-  pending_stop_.reset();
+  machine_->state = &state;
+  machine_->address_space = &space;
 
   const auto stop_at = options.instruction_limit ? machine_->total_user_insns_committed + *options.instruction_limit
                                                  : std::numeric_limits<W64>::max();
@@ -326,9 +276,9 @@ RunResult Machine::run(RunOptions options) {
   // instruction that reaches the limit, report the exit rather than masking it
   // as a plain limit stop. This matters for single-stepping, where every step
   // sets a one-instruction limit.
-  if (pending_stop_) {
-    pending_stop_->stats = stats();
-    return *pending_stop_;
+  if (machine_->pending_stop) {
+    machine_->pending_stop->stats = stats();
+    return *machine_->pending_stop;
   }
 
   if (options.instruction_limit && stats().instructions >= stop_at)
@@ -346,42 +296,6 @@ const Options& Machine::options() const noexcept {
   return options_;
 }
 
-RegisterFile& Machine::register_file(std::size_t core_index) noexcept {
-  return machine_->register_file(core_index);
-}
-
-const RegisterFile& Machine::register_file(std::size_t core_index) const noexcept {
-  return machine_->register_file(core_index);
-}
-
-address_t Machine::segment_base(const RegisterFile& registers, SegmentRegister segment) const noexcept {
-  return context_from_register_file(registers).seg[segment_register_index(segment)].base;
-}
-
-void Machine::set_segment_base(RegisterFile& registers, SegmentRegister segment, address_t base) noexcept {
-  context_from_register_file(registers).seg[segment_register_index(segment)].base = base;
-}
-
-AddressSpace& Machine::address_space() noexcept {
-  return *address_space_;
-}
-
-const AddressSpace& Machine::address_space() const noexcept {
-  return *address_space_;
-}
-
-SyscallResult Machine::dispatch_syscall(RegisterFile& registers, SyscallKind kind) {
-  return callbacks_.syscall(*this, registers, kind);
-}
-
-CpuidResult Machine::dispatch_cpuid(RegisterFile& registers, CpuidRequest request) noexcept {
-  return callbacks_.cpuid(*this, registers, request);
-}
-
-void Machine::set_pending_stop(RunResult result) {
-  pending_stop_ = std::move(result);
-}
-
 [[noreturn]] void throw_x86_exception(Context& context, byte exception, W32 errorcode, Waddr virtaddr) {
   X86Exception e{
       .vector = exception,
@@ -397,39 +311,21 @@ void Machine::set_pending_stop(RunResult result) {
   throw e;
 }
 
-void dispatch_syscall_64bit(Context& context) {
-  assert(context.machine);
-  Machine& machine = *context.machine;
+// Deliver a guest syscall to the host callback and, if the host asks to stop,
+// record the reason on the core so Machine::run can report it.
+void dispatch_syscall(Context& context, SyscallKind kind) {
+  assert(context.machine_impl);
+  assert(context.address_space);
+  MachineImpl& impl = *context.machine_impl;
   const W64 old_rip = context.commitarf[REG_rip];
-  SyscallResult result = machine.dispatch_syscall(context, SyscallKind::syscall64);
-  advance_default_syscall_rip_if_unchanged(context, SyscallKind::syscall64, old_rip);
-
-  if (!result.continue_execution) {
-    machine.set_pending_stop(RunResult{
-        .reason = result.reason, .stats = machine.stats(), .x86_exception = std::nullopt, .message = result.message});
-    requested_switch_to_native = 1;
-  }
-}
-
-void dispatch_syscall_32bit(Context& context, int semantics) {
-  assert(context.machine);
-  Machine& machine = *context.machine;
-  const SyscallKind kind = to_syscall_kind(semantics);
-  const W64 old_rip = context.commitarf[REG_rip];
-  SyscallResult result = machine.dispatch_syscall(context, kind);
+  SyscallResult result = impl.callbacks.syscall(impl.owner, context, *context.address_space, kind);
   advance_default_syscall_rip_if_unchanged(context, kind, old_rip);
 
   if (!result.continue_execution) {
-    machine.set_pending_stop(RunResult{
-        .reason = result.reason, .stats = machine.stats(), .x86_exception = std::nullopt, .message = result.message});
+    impl.pending_stop = RunResult{
+        .reason = result.reason, .stats = impl.owner.stats(), .x86_exception = std::nullopt, .message = result.message};
     requested_switch_to_native = 1;
   }
-}
-
-CpuidResult dispatch_cpuid(Context& context, W32 func, W32 subfunc) {
-  assert(context.machine);
-  x86sim::CpuidResult result = context.machine->dispatch_cpuid(context, {.function = func, .subfunction = subfunc});
-  return {.eax = result.eax, .ebx = result.ebx, .ecx = result.ecx, .edx = result.edx};
 }
 
 } // namespace x86sim
@@ -441,15 +337,18 @@ void Context::propagate_x86_exception(byte exception, W32 errorcode, Waddr virta
 }
 
 void handle_syscall_64bit(Context& context) {
-  dispatch_syscall_64bit(context);
+  dispatch_syscall(context, SyscallKind::syscall64);
 }
 
 void handle_syscall_32bit(Context& context, int semantics) {
-  dispatch_syscall_32bit(context, semantics);
+  dispatch_syscall(context, to_syscall_kind(semantics));
 }
 
 CpuidResult handle_cpuid(Context& context, W32 func, W32 subfunc) {
-  return dispatch_cpuid(context, func, subfunc);
+  assert(context.machine_impl);
+  assert(context.address_space);
+  MachineImpl& impl = *context.machine_impl;
+  return impl.callbacks.cpuid(impl.owner, context, *context.address_space, {.function = func, .subfunction = subfunc});
 }
 
 } // namespace x86sim

@@ -32,7 +32,7 @@ target_sources(x86sim
     FILE_SET HEADERS
     BASE_DIRS include
     FILES
-      include/x86sim/logging.h
+      include/x86sim/logging.hpp
       include/x86sim/registerfile.hpp
       include/x86sim/x86sim.hpp
 )

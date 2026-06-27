@@ -339,7 +339,7 @@ const char* arch_reg_names[TRANSREG_COUNT] = {
 };
 
 void Context::fxsave(FXSAVEStruct& state) {
-  state.cw = fpcw;
+  state.cw = static_cast<W16>(fpcw);
   // clear everything but 4 FP status flag bits (c3/c2/c1/c0):
   state.sw = commitarf[REG_fpsw] & ((0x7 << 8) | (1 << 14));
   int tos = commitarf[REG_fptos] >> 3;
@@ -390,7 +390,8 @@ void Context::fxrstor(const FXSAVEStruct& state) {
 
   // x86 FSAVE state is in order of stack rather than physical registers:
   foreach (i, 8) {
-    fpstack[lowbits(state.sw.tos + i, 3)] = x87_fp_80bit_to_64bit(&state.fpregs[i].reg, fpcw.rc);
+    fpstack[lowbits(state.sw.tos + i, 3)] =
+        x87_fp_80bit_to_64bit(&state.fpregs[i].reg, X87ControlWord(static_cast<W16>(fpcw)).rc);
   }
 
   mxcsr = state.mxcsr & state.mxcsr_mask;

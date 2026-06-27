@@ -630,26 +630,21 @@ typedef W64 Level1PTE;
 // PTLsim cores will need to define other per-VCPU structures to
 // hold their internal state.
 //
-struct ContextBase : RegisterFile {
+// ContextBase extends the externally-visible CpuState (registers, segments, FP
+// state, use32/use64, flags, ...) with the simulator-internal bookkeeping that
+// never escapes to the public API. Because the architectural state lives in the
+// CpuState base, snapshotting/restoring a context is a plain slice/assign; see
+// Context::to_cpu_state / Context::load_cpu_state.
+struct ContextBase : CpuState {
   Machine* machine = nullptr;
   MachineImpl* machine_impl = nullptr;
+  AddressSpace* address_space = nullptr;
 
   int vcpuid;
-  SegmentDescriptorCache seg[segment_register_count];
-  W64 swapgs_base;
 
-  W64 fpstack[8];
-  X87ControlWord fpcw;
-  MXCSR mxcsr;
-
-  byte use32; // depends on active CS descriptor
-  byte use64; // depends on active CS descriptor
-
-  Waddr virt_addr_mask;
+  // Non-architectural simulator state:
   W64 exception;
   Waddr error_code;
-
-  W32 internal_eflags; // parts of EFLAGS that are infrequently updated
 
   // Always running in userspace version:
   byte running;
@@ -706,30 +701,36 @@ struct Context : public ContextBase {
   }
 
   int write_segreg(unsigned int segid, W16 selector);
-  void reload_segment_descriptor(unsigned int segid, W16 selector);
-  void swapgs();
   void init();
   void fxsave(FXSAVEStruct& state);
   void fxrstor(const FXSAVEStruct& state);
 
+  // Snapshot/restore the externally-visible architectural state. Because Context
+  // derives from CpuState these are slice/assign operations; load_cpu_state also
+  // re-establishes the self-referential register pointers and derived segment
+  // shadow state.
+  [[nodiscard]] CpuState to_cpu_state() const { return static_cast<const CpuState&>(*this); }
+  void load_cpu_state(const CpuState& state);
+
+  // CpuState as it would be after returning from a syscall of the given kind
+  // (i.e. with rip advanced past the syscall instruction).
+  [[nodiscard]] CpuState syscall_return_state(SyscallKind kind) const;
+
   Context() {
     setzero(static_cast<ContextBase&>(*this));
 
-    use32 = 1;
-    use64 = 1;
+    use32 = true;
+    use64 = true;
     commitarf[REG_rip] = 0x100000;
 
-    seg[segment_register_index(SegmentRegister::cs)].selector = 0x33;
-    seg[segment_register_index(SegmentRegister::ss)].selector = 0x2b;
-    seg[segment_register_index(SegmentRegister::ds)].selector = 0x00;
-    seg[segment_register_index(SegmentRegister::es)].selector = 0x00;
-    seg[segment_register_index(SegmentRegister::fs)].selector = 0x00;
-    seg[segment_register_index(SegmentRegister::gs)].selector = 0x00;
+    segment_selectors[segment_register_index(SegmentRegister::cs)] = 0x33;
+    segment_selectors[segment_register_index(SegmentRegister::ss)] = 0x2b;
+    // Remaining selectors and all segment bases default to zero.
     update_shadow_segment_descriptors();
 
     running = 1;
     commitarf[REG_ctx] = reinterpret_cast<Waddr>(this);
-    commitarf[REG_fpstack] = reinterpret_cast<Waddr>(&fpstack);
+    commitarf[REG_fpstack] = reinterpret_cast<Waddr>(fpstack.data());
   }
 
   Context(const Options& config, MachineImpl& core, int vcpuid);
@@ -1458,16 +1459,15 @@ struct std::formatter<x86sim::Context> {
     }
 
     out = std::format_to(out, "  Segment Registers:\n");
-    out = std::format_to(out, "    cs {}\n", ctx.seg[segment_register_index(SegmentRegister::cs)]);
-    out = std::format_to(out, "    ss {}\n", ctx.seg[segment_register_index(SegmentRegister::ss)]);
-    out = std::format_to(out, "    ds {}\n", ctx.seg[segment_register_index(SegmentRegister::ds)]);
-    out = std::format_to(out, "    es {}\n", ctx.seg[segment_register_index(SegmentRegister::es)]);
-    out = std::format_to(out, "    fs {}\n", ctx.seg[segment_register_index(SegmentRegister::fs)]);
-    out = std::format_to(out, "    gs {}\n", ctx.seg[segment_register_index(SegmentRegister::gs)]);
+    for (SegmentRegister reg : {SegmentRegister::cs, SegmentRegister::ss, SegmentRegister::ds, SegmentRegister::es,
+                                SegmentRegister::fs, SegmentRegister::gs}) {
+      const std::size_t i = segment_register_index(reg);
+      out = std::format_to(out, "    {} {:04x}: base {:016x}\n", reg, ctx.segment_selectors[i], ctx.segment_bases[i]);
+    }
 
     out = std::format_to(out, "  FPU:\n");
-    out = std::format_to(out, "    FP Control Word: {}\n", ctx.fpcw);
-    out = std::format_to(out, "    x86sim::MXCSR:           {}\n", ctx.mxcsr);
+    out = std::format_to(out, "    FP Control Word: 0x{:04x}\n", static_cast<W16>(ctx.fpcw));
+    out = std::format_to(out, "    x86sim::MXCSR:           0x{:08x}\n", ctx.mxcsr);
 
     for (int i = 7; i >= 0; i--) {
       int stackid = (i - (ctx.commitarf[REG_fptos] >> 3)) & 0x7;

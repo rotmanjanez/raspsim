@@ -1,132 +1,296 @@
-#include "addrspace.h"
+#include "x86sim/addrspace.hpp"
 
-#include <cstdlib>
+#include "globals.h"
+#include "x86sim/logging.hpp"
+
+#include <algorithm>
+#include <cassert>
 #include <cstring>
-//
-// Shadow page accessibility table format (x86-64 only):
-// Top level:  1048576 bytes: 131072 64-bit pointers to chunks
-//
-// Leaf level: 65536 bytes per chunk: 524288 bits, one per 4 KB page
-// Total: 131072 chunks x 524288 pages per chunk x 4 KB per page = 48 bits virtual address space
-// Total: 17 bits       + 19 bits                + 12 bits       = 48 bits virtual address space
-//
+#include <new>
 
 namespace x86sim {
+namespace {
 
-byte& AddressSpace::pageid_to_map_byte(spat_t top, Waddr pageid) {
-  W64 chunkid = pageid >> log2(SPAT_PAGES_PER_CHUNK);
+constexpr address_t address_space_bits = 48;
+constexpr address_t address_space_size = address_t{1} << address_space_bits;
+constexpr address_t address_space_mask = address_space_size - 1;
+constexpr address_t page_bits = 12;
+constexpr address_t page_size = AddressSpace::kPageSize;
+constexpr address_t page_mask = page_size - 1;
+constexpr std::size_t spat_toplevel_chunk_bits = 17;
+constexpr std::size_t spat_pages_per_chunk_bits = 19;
+constexpr std::size_t spat_toplevel_chunks = std::size_t{1} << spat_toplevel_chunk_bits;
+constexpr std::size_t spat_pages_per_chunk = std::size_t{1} << spat_pages_per_chunk_bits;
+constexpr std::size_t spat_bytes_per_chunk = spat_pages_per_chunk / 8;
 
-  if (!top[chunkid]) {
-    top[chunkid] = (SPATChunk*)std::aligned_alloc(PAGE_SIZE, ceil((Waddr)SPAT_BYTES_PER_CHUNK, PAGE_SIZE));
-    if (top[chunkid])
-      std::memset(top[chunkid], 0, SPAT_BYTES_PER_CHUNK);
+[[nodiscard]] address_t page_floor(address_t value) noexcept {
+  return value & ~page_mask;
+}
+
+[[nodiscard]] std::optional<address_t> page_ceil(address_t value) noexcept {
+  if (value > std::numeric_limits<address_t>::max() - page_mask)
+    return std::nullopt;
+  return (value + page_mask) & ~page_mask;
+}
+
+[[nodiscard]] bool range_overflows(address_t start, std::uint64_t size) noexcept {
+  return size != 0 && start > std::numeric_limits<address_t>::max() - (size - 1);
+}
+
+} // namespace
+
+struct AddressSpace::ShadowMap {
+  using Chunk = std::array<std::byte, spat_bytes_per_chunk>;
+
+  std::array<std::unique_ptr<Chunk>, spat_toplevel_chunks> chunks;
+
+  [[nodiscard]] std::byte& byte_for_page(address_t pageid) {
+    const address_t chunkid = pageid >> spat_pages_per_chunk_bits;
+    if (!chunks[chunkid])
+      chunks[chunkid] = std::make_unique<Chunk>();
+    const address_t byteid = (pageid >> 3) & (spat_bytes_per_chunk - 1);
+    return (*chunks[chunkid])[byteid];
   }
-  SPATChunk& chunk = *top[chunkid];
-  W64 byteid = bits(pageid, 3, log2(SPAT_BYTES_PER_CHUNK));
-  assert(byteid <= SPAT_BYTES_PER_CHUNK);
-  return chunk[byteid];
-}
 
-void AddressSpace::make_accessible(void* p, Waddr size, spat_t top) {
-  Waddr address = lowbits((Waddr)p, ADDRESS_SPACE_BITS);
-  Waddr firstpage = (Waddr)address >> log2(PAGE_SIZE);
-  Waddr lastpage = ((Waddr)address + size - 1) >> log2(PAGE_SIZE);
-  logging::println("SPT: Making byte range {} to {} (size {}) accessible for {}", (void*)(firstpage << log2(PAGE_SIZE)),
-                   (void*)(lastpage << log2(PAGE_SIZE)), size,
-                   ((top == readmap)    ? "read"
-                    : (top == writemap) ? "write"
-                    : (top == execmap)  ? "exec"
-                                        : "UNKNOWN"));
-  logging::flush();
-  assert(ceil((W64)address + size, PAGE_SIZE) <= ADDRESS_SPACE_SIZE);
-  for (W64 i = firstpage; i <= lastpage; i++) {
-    setbit(pageid_to_map_byte(top, i), lowbits(i, 3));
+  [[nodiscard]] bool bit_for_page(address_t pageid) const noexcept {
+    const address_t chunkid = pageid >> spat_pages_per_chunk_bits;
+    if (!chunks[chunkid])
+      return false;
+    const address_t byteid = (pageid >> 3) & (spat_bytes_per_chunk - 1);
+    const auto value = std::to_integer<unsigned>((*chunks[chunkid])[byteid]);
+    return (value & (1u << (pageid & 7u))) != 0;
+  }
+
+  void set_page(address_t pageid) {
+    std::byte& value = byte_for_page(pageid);
+    value = static_cast<std::byte>(std::to_integer<unsigned>(value) | (1u << (pageid & 7u)));
+  }
+
+  void clear_page(address_t pageid) {
+    std::byte& value = byte_for_page(pageid);
+    value = static_cast<std::byte>(std::to_integer<unsigned>(value) & ~(1u << (pageid & 7u)));
+  }
+};
+
+AddressSpace::AddressSpace()
+    : readmap_(std::make_unique<ShadowMap>()), writemap_(std::make_unique<ShadowMap>()),
+      execmap_(std::make_unique<ShadowMap>()), dirtymap_(std::make_unique<ShadowMap>()) {}
+
+AddressSpace::AddressSpace(const AddressSpace& other) : AddressSpace() {
+  for (const auto& [address, page] : other.mapped_mem_) {
+    map_or_throw(address, kPageSize, other.protection_at(address));
+    std::memcpy(mapped_mem_.at(address)->data(), page->data(), kPageSize);
   }
 }
 
-void AddressSpace::make_inaccessible(void* p, Waddr size, spat_t top) {
-  Waddr address = lowbits((Waddr)p, ADDRESS_SPACE_BITS);
-  Waddr firstpage = (Waddr)address >> log2(PAGE_SIZE);
-  Waddr lastpage = ((Waddr)address + size - 1) >> log2(PAGE_SIZE);
+AddressSpace& AddressSpace::operator=(const AddressSpace& other) {
+  if (this == &other)
+    return *this;
+  AddressSpace copy(other);
+  *this = std::move(copy);
+  return *this;
+}
 
-  logging::println("SPT: Making byte range {} to {} (size {}) inaccessible for {}",
-                   (void*)(firstpage << log2(PAGE_SIZE)), (void*)(lastpage << log2(PAGE_SIZE)), size,
-                   ((top == readmap)    ? "read"
-                    : (top == writemap) ? "write"
-                    : (top == execmap)  ? "exec"
-                                        : "UNKNOWN"));
-  logging::flush();
+AddressSpace::AddressSpace(AddressSpace&&) noexcept = default;
 
-  assert(ceil((W64)address + size, PAGE_SIZE) <= ADDRESS_SPACE_SIZE);
-  for (Waddr i = firstpage; i <= lastpage; i++) {
-    clearbit(pageid_to_map_byte(top, i), lowbits(i, 3));
+AddressSpace& AddressSpace::operator=(AddressSpace&&) noexcept = default;
+
+AddressSpace::~AddressSpace() = default;
+
+std::expected<void, MemoryError> AddressSpace::map(address_t start, std::uint64_t size, Protection prot) noexcept {
+  if (size == 0)
+    return std::unexpected(MemoryError::zero_size);
+  if (range_overflows(start, size))
+    return std::unexpected(MemoryError::mapping_failed);
+
+  try {
+    map_or_throw(start, size, prot);
+  } catch (const std::bad_alloc&) {
+    return std::unexpected(MemoryError::out_of_memory);
+  } catch (...) {
+    return std::unexpected(MemoryError::mapping_failed);
   }
+  return {};
 }
 
+void AddressSpace::unmap(address_t start, std::uint64_t size) noexcept {
+  if (size == 0 || range_overflows(start, size))
+    return;
 
-AddressSpace::spat_t AddressSpace::allocmap() {
-  constexpr Waddr bytes = SPAT_TOPLEVEL_CHUNKS * sizeof(SPATChunk*);
+  start = page_floor(start);
+  const auto end = page_ceil(start + size);
+  if (!end)
+    return;
 
-  spat_t top = (spat_t)std::aligned_alloc(PAGE_SIZE, ceil(bytes, PAGE_SIZE));
-  if (top)
-    std::memset(top, 0, bytes);
-  return top;
+  for (address_t page = start; page < *end; page += kPageSize)
+    mapped_mem_.erase(page);
+  setattr(start, *end - start, Protection::none);
 }
-void AddressSpace::freemap(AddressSpace::spat_t top) {
-  if (top) {
-    foreach (i, SPAT_TOPLEVEL_CHUNKS) {
-      if (top[i])
-        std::free(top[i]);
-    }
-    std::free(top);
+
+std::expected<void, MemoryError> AddressSpace::read(address_t start, std::span<std::byte> out) const noexcept {
+  if (out.empty())
+    return std::unexpected(MemoryError::zero_size);
+  if (range_overflows(start, out.size()))
+    return std::unexpected(MemoryError::unmapped_address);
+
+  std::uint64_t processed = 0;
+  while (processed < out.size()) {
+    const address_t addr = start + processed;
+    const auto* src = static_cast<const std::byte*>(page_virt_to_mapped(addr));
+    if (!src)
+      return std::unexpected(MemoryError::unmapped_address);
+
+    const auto chunk = std::min<std::uint64_t>(out.size() - processed, kPageSize - (addr & page_mask));
+    std::memcpy(out.data() + processed, src, chunk);
+    processed += chunk;
   }
+  return {};
 }
 
-AddressSpace::AddressSpace() : readmap(allocmap()), writemap(allocmap()), execmap(allocmap()), dirtymap(allocmap()) {}
+std::expected<void, MemoryError> AddressSpace::write(address_t start, std::span<const std::byte> bytes) noexcept {
+  if (bytes.empty())
+    return std::unexpected(MemoryError::zero_size);
+  if (range_overflows(start, bytes.size()))
+    return std::unexpected(MemoryError::unmapped_address);
 
-AddressSpace::~AddressSpace() {
-  freemap(readmap);
-  freemap(writemap);
-  freemap(execmap);
-  freemap(dirtymap);
+  std::uint64_t processed = 0;
+  while (processed < bytes.size()) {
+    const address_t addr = start + processed;
+    auto* dst = static_cast<std::byte*>(page_virt_to_mapped(addr));
+    if (!dst)
+      return std::unexpected(MemoryError::unmapped_address);
+
+    const auto chunk = std::min<std::uint64_t>(bytes.size() - processed, kPageSize - (addr & page_mask));
+    std::memcpy(dst, bytes.data() + processed, chunk);
+    processed += chunk;
+  }
+  return {};
 }
 
-void AddressSpace::setattr(void* start, Waddr length, Protection prot) {
-  logging::println("setattr: region {} to {} ({} KB) has user-visible attributes {}{}{}", start,
-                   (void*)((char*)start + length), length >> 10, (has_protection(prot, Protection::read) ? 'r' : '-'),
-                   (has_protection(prot, Protection::write) ? 'w' : '-'),
-                   (has_protection(prot, Protection::execute) ? 'x' : '-'));
-
-  if (has_protection(prot, Protection::read))
-    allow_read(start, length);
-  else
-    disallow_read(start, length);
-
-  if (has_protection(prot, Protection::write))
-    allow_write(start, length);
-  else
-    disallow_write(start, length);
-
-  if (has_protection(prot, Protection::execute))
-    allow_exec(start, length);
-  else
-    disallow_exec(start, length);
-}
-
-Protection AddressSpace::getattr(void* addr) {
-  Waddr address = lowbits((Waddr)addr, ADDRESS_SPACE_BITS);
-
-  Waddr page = pageid(address);
+Protection AddressSpace::protection_at(address_t address) const noexcept {
+  address &= address_space_mask;
+  const address_t page = pageid(address);
 
   Protection prot = Protection::none;
-  if (bit(pageid_to_map_byte(readmap, page), lowbits(page, 3)))
+  if (readmap_->bit_for_page(page))
     prot = prot | Protection::read;
-  if (bit(pageid_to_map_byte(writemap, page), lowbits(page, 3)))
+  if (writemap_->bit_for_page(page))
     prot = prot | Protection::write;
-  if (bit(pageid_to_map_byte(execmap, page), lowbits(page, 3)))
+  if (execmap_->bit_for_page(page))
     prot = prot | Protection::execute;
-
   return prot;
+}
+
+std::unique_ptr<AddressSpace> AddressSpace::clone_deep() const {
+  return std::make_unique<AddressSpace>(*this);
+}
+
+void* AddressSpace::page_virt_to_mapped(address_t addr) noexcept {
+  auto it = mapped_mem_.find(page_floor(addr));
+  if (it == mapped_mem_.end())
+    return nullptr;
+
+  return it->second->data() + (addr & page_mask);
+}
+
+const void* AddressSpace::page_virt_to_mapped(address_t addr) const noexcept {
+  auto it = mapped_mem_.find(page_floor(addr));
+  if (it == mapped_mem_.end())
+    return nullptr;
+
+  return it->second->data() + (addr & page_mask);
+}
+
+bool AddressSpace::fastcheck(address_t addr, spat_t top) const noexcept {
+  if ((addr >> address_space_bits) != 0 || top == nullptr)
+    return false;
+  return top->bit_for_page(pageid(addr));
+}
+
+bool AddressSpace::check(address_t address, Protection prot) const noexcept {
+  if (has_protection(prot, Protection::read) && !fastcheck(address, read_map()))
+    return false;
+  if (has_protection(prot, Protection::write) && !fastcheck(address, write_map()))
+    return false;
+  if (has_protection(prot, Protection::execute) && !fastcheck(address, exec_map()))
+    return false;
+  return true;
+}
+
+bool AddressSpace::isdirty(address_t mfn) const noexcept {
+  return fastcheck(mfn << page_bits, dirtymap_.get());
+}
+
+void AddressSpace::setdirty(address_t mfn) {
+  make_page_accessible(mfn << page_bits, *dirtymap_);
+}
+
+void AddressSpace::cleardirty(address_t mfn) {
+  make_page_inaccessible(mfn << page_bits, *dirtymap_);
+}
+
+void AddressSpace::map_or_throw(address_t start, std::uint64_t size, Protection prot) {
+  start = page_floor(start);
+  const auto aligned_size = page_ceil(size);
+  if (!aligned_size)
+    throw std::bad_alloc();
+
+  const address_t num_pages = *aligned_size / kPageSize;
+  for (address_t i = 0; i < num_pages; ++i)
+    mapped_mem_.insert_or_assign(start + i * kPageSize, std::make_unique<Page>());
+  setattr(start, *aligned_size, prot);
+}
+
+void AddressSpace::setattr(address_t start, std::uint64_t size, Protection prot) {
+  logging::println(
+      "setattr: region {} to {} ({} KB) has user-visible attributes {}{}{}", reinterpret_cast<void*>(start),
+      reinterpret_cast<void*>(start + size), size >> 10, (has_protection(prot, Protection::read) ? 'r' : '-'),
+      (has_protection(prot, Protection::write) ? 'w' : '-'), (has_protection(prot, Protection::execute) ? 'x' : '-'));
+
+  if (has_protection(prot, Protection::read))
+    make_accessible(start, size, *readmap_);
+  else
+    make_inaccessible(start, size, *readmap_);
+
+  if (has_protection(prot, Protection::write))
+    make_accessible(start, size, *writemap_);
+  else
+    make_inaccessible(start, size, *writemap_);
+
+  if (has_protection(prot, Protection::execute))
+    make_accessible(start, size, *execmap_);
+  else
+    make_inaccessible(start, size, *execmap_);
+}
+
+void AddressSpace::make_accessible(address_t address, std::uint64_t size, ShadowMap& top) {
+  address &= address_space_mask;
+  const address_t firstpage = address >> page_bits;
+  const address_t lastpage = (address + size - 1) >> page_bits;
+  assert(((address + size + page_mask) & ~page_mask) <= address_space_size);
+  for (address_t page = firstpage; page <= lastpage; ++page)
+    top.set_page(page);
+}
+
+void AddressSpace::make_inaccessible(address_t address, std::uint64_t size, ShadowMap& top) {
+  address &= address_space_mask;
+  const address_t firstpage = address >> page_bits;
+  const address_t lastpage = (address + size - 1) >> page_bits;
+  assert(((address + size + page_mask) & ~page_mask) <= address_space_size);
+  for (address_t page = firstpage; page <= lastpage; ++page)
+    top.clear_page(page);
+}
+
+void AddressSpace::make_page_accessible(address_t address, ShadowMap& top) {
+  top.set_page(pageid(address));
+}
+
+void AddressSpace::make_page_inaccessible(address_t address, ShadowMap& top) {
+  top.clear_page(pageid(address));
+}
+
+address_t AddressSpace::pageid(address_t address) noexcept {
+  return (address & address_space_mask) >> page_bits;
 }
 
 } // namespace x86sim

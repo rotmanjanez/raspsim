@@ -12,7 +12,7 @@
 #include "branchpred.h"
 #include "logic.h"
 #include "dcache.h"
-#include "addrspace.h"
+#include "x86sim/addrspace.hpp"
 
 #define INSIDE_OOOCORE
 #include "ooocore.h"
@@ -210,7 +210,7 @@ void ThreadContext::reset_fetch_unit(W64 realrip) {
 //
 void ThreadContext::invalidate_smc() {
   if unlikely (smc_invalidate_pending) {
-    AddressSpace& asp = ctx.machine->address_space();
+    AddressSpace& asp = *ctx.address_space;
     logging::println(logging::DEBUG, "SMC invalidate pending on {}", smc_invalidate_rvp);
     core.machine.bbcache->invalidate_page(asp, smc_invalidate_rvp.mfnlo, INVALIDATE_REASON_SMC);
     if unlikely (smc_invalidate_rvp.mfnlo != smc_invalidate_rvp.mfnhi)
@@ -1667,7 +1667,7 @@ int ReorderBufferEntry::commit() {
    * because the store has happened before the macroop started execution and thus needs to be retranslated.
   */
   const bool page_crossing = ((lowbits(uop.rip.rip, 12) + (uop.bytes - 1)) >> 12);
-  AddressSpace& asp = ctx.machine->address_space();
+  AddressSpace& asp = *ctx.address_space;
 
   if unlikely (uop.som && (asp.isdirty(uop.rip.mfnlo) | (page_crossing && asp.isdirty(uop.rip.mfnhi)))) {
     /* If we're at the start of a macroop and the macroop has already been invalidated

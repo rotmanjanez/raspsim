@@ -54,8 +54,8 @@ struct OutOfOrderMachine : public MachineImpl {
   OutOfOrderMachine(Machine& machine, Options config);
   ~OutOfOrderMachine() override;
   std::string_view name() const override;
-  RegisterFile& register_file(std::size_t core_index) noexcept override;
-  const RegisterFile& register_file(std::size_t core_index) const noexcept override;
+  Context& cpu_context() override;
+  const Context& cpu_context() const override;
   int run() override;
   virtual void update_stats(PTLsimStats& stats) override;
   virtual void flush_tlb(Context& ctx) override;

@@ -7,7 +7,7 @@
 
 #include "ptlsim.h"
 #include "config.h"
-#include "x86sim/logging.h"
+#include "x86sim/logging.hpp"
 
 namespace logging = x86sim::logging;
 

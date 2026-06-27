@@ -21,7 +21,7 @@
 #include "ptlsim-api.h"
 #include "ptlhwdef.h"
 #include "x86sim/x86sim.hpp"
-#include "x86sim/logging.h"
+#include "x86sim/logging.hpp"
 
 namespace x86sim {
 
@@ -73,6 +73,9 @@ struct BasicBlockCache;
 
 struct MachineImpl {
   Machine& owner;
+  // The host's syscall/cpuid callbacks (owner.callbacks_), reachable directly
+  // from the core's dispatch path without a public Machine method.
+  HostCallbacks& callbacks;
   Options config;
   std::unique_ptr<BasicBlockCache> bbcache;
 
@@ -84,12 +87,30 @@ struct MachineImpl {
   W64 total_user_insns_committed = 0;
   W64 total_basic_blocks_committed = 0;
 
+  // The architectural state and address space the current run executes against.
+  // Machine::run points these at the caller's CpuState/AddressSpace before
+  // delegating to run(); each core loads its single internal context from them
+  // at the start of run() and stores the committed state back at the end.
+  CpuState* state = nullptr;
+  AddressSpace* address_space = nullptr;
+
+  // Set by the core's syscall/cpuid dispatch when the host asks execution to
+  // stop; Machine::run consumes it and prefers it over a plain instruction
+  // limit. Reset at the start of each run.
+  std::optional<RunResult> pending_stop;
+
   explicit MachineImpl(Machine& owner_, Options config_);
   virtual ~MachineImpl();
   virtual std::string_view name() const = 0;
-  virtual RegisterFile& register_file(std::size_t core_index) noexcept = 0;
-  virtual const RegisterFile& register_file(std::size_t core_index) const noexcept = 0;
-  virtual int run();
+
+  // The core's single internal execution context: scratch holding the live
+  // register file, the REG_ctx self-pointer and the uop helper methods.
+  [[nodiscard]] virtual Context& cpu_context() = 0;
+  [[nodiscard]] virtual const Context& cpu_context() const = 0;
+
+  // Run the model until a stopping point, executing *state against
+  // *address_space and writing the committed architectural state back to *state.
+  virtual int run() = 0;
   virtual void update_stats(PTLsimStats& stats) = 0;
   virtual void flush_tlb(Context& ctx) = 0;
   virtual void flush_tlb_virt(Context& ctx, Waddr virtaddr) = 0;

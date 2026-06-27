@@ -7,7 +7,7 @@
 
 #include "globals.h"
 #include "ptlsim.h"
-#include "x86sim/logging.h"
+#include "x86sim/logging.hpp"
 
 #include <algorithm>
 #include <array>

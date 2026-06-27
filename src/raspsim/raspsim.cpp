@@ -6,7 +6,7 @@
 //
 #include "x86sim-support/cpuid.hpp"
 #include "x86sim/x86sim.hpp"
-#include "x86sim/logging.h"
+#include "x86sim/logging.hpp"
 
 #include "ptlsim.h"
 #include "config.h"
@@ -105,12 +105,12 @@ void print_hex_bytes(std::span<const std::byte> bytes, size_t splitat = 16) {
 // continue (or be inspected).
 class CliHost : public x86sim::HostCallbacks {
 public:
-  [[nodiscard]] x86sim::CpuidResult cpuid(x86sim::Machine&, x86sim::RegisterFile&,
+  [[nodiscard]] x86sim::CpuidResult cpuid(x86sim::Machine&, x86sim::CpuState&, x86sim::AddressSpace&,
                                           x86sim::CpuidRequest request) noexcept override {
     return x86sim::defaults::default_cpuid(request);
   }
 
-  [[nodiscard]] x86sim::SyscallResult syscall(x86sim::Machine&, x86sim::RegisterFile& context,
+  [[nodiscard]] x86sim::SyscallResult syscall(x86sim::Machine&, x86sim::CpuState& context, x86sim::AddressSpace&,
                                               x86sim::SyscallKind kind) override {
     using x86sim::Register;
     using x86sim::StopReason;
@@ -142,7 +142,7 @@ public:
   return bytes;
 }
 
-bool handle_config_arg(x86sim::Machine* machine, x86sim::RegisterFile* registers, x86sim::Options& options,
+bool handle_config_arg(x86sim::AddressSpace* address_space, x86sim::RegisterFile* registers, x86sim::Options& options,
                        std::string_view line, std::vector<x86sim::address_t>* dump_pages) {
   if (line.empty())
     return false;
@@ -164,7 +164,7 @@ bool handle_config_arg(x86sim::Machine* machine, x86sim::RegisterFile* registers
     options.debug.perfect_cache = true;
   } else if (toks[0] == "Fstbrpred") {
     options.debug.static_branchpred = true;
-  } else if (machine == nullptr || registers == nullptr) {
+  } else if (address_space == nullptr || registers == nullptr) {
     return false;
   } else if (toks[0][0] == 'M') {
     if (toks.size() != 2) {
@@ -173,7 +173,7 @@ bool handle_config_arg(x86sim::Machine* machine, x86sim::RegisterFile* registers
     }
     auto addr = parse_hex(toks[0].substr(1));
     auto prot = protection_from_string(toks[1]);
-    if (!addr || (*addr & (x86sim::Machine::kPageSize - 1)) != 0) {
+    if (!addr || (*addr & (x86sim::AddressSpace::kPageSize - 1)) != 0) {
       logging::eprintln("Error: invalid value {}", toks[0]);
       return true;
     }
@@ -181,7 +181,7 @@ bool handle_config_arg(x86sim::Machine* machine, x86sim::RegisterFile* registers
       logging::eprintln("Error: invalid mem prot {}", toks[1]);
       return true;
     }
-    if (auto result = machine->map(*addr, x86sim::Machine::kPageSize, *prot); !result) {
+    if (auto result = address_space->map(*addr, x86sim::AddressSpace::kPageSize, *prot); !result) {
       logging::eprintln("Error: {}", result.error());
       return true;
     }
@@ -196,11 +196,11 @@ bool handle_config_arg(x86sim::Machine* machine, x86sim::RegisterFile* registers
       logging::eprintln("Error: invalid value {}", toks[0]);
       return true;
     }
-    if (!bytes || bytes->size() > x86sim::Machine::kPageSize - (*addr & (x86sim::Machine::kPageSize - 1))) {
+    if (!bytes || bytes->size() > x86sim::AddressSpace::kPageSize - (*addr & (x86sim::AddressSpace::kPageSize - 1))) {
       logging::eprintln("Error: arg has odd size or crosses page boundary {}", (void*)*addr);
       return true;
     }
-    if (auto result = machine->write_memory(*addr, std::as_bytes(std::span(*bytes))); !result) {
+    if (auto result = address_space->write(*addr, std::as_bytes(std::span(*bytes))); !result) {
       logging::eprintln("Error: {}", result.error());
       return true;
     }
@@ -214,7 +214,7 @@ bool handle_config_arg(x86sim::Machine* machine, x86sim::RegisterFile* registers
       logging::eprintln("Error: invalid value {}", toks[0]);
       return true;
     }
-    dump_pages->push_back(*addr & ~(x86sim::Machine::kPageSize - 1));
+    dump_pages->push_back(*addr & ~(x86sim::AddressSpace::kPageSize - 1));
   } else {
     if (toks.size() != 2) {
       logging::eprintln("Error: option {} has wrong number of arguments", line);
@@ -278,12 +278,14 @@ int main(int argc, char** argv) {
 
   CliHost host;
   x86sim::Machine machine(host, options);
-  x86sim::RegisterFile& registers = machine.register_file(0);
+  x86sim::AddressSpace address_space;
+  x86sim::CpuState initial_state;
+  x86sim::RegisterFile& registers = initial_state;
   std::vector<x86sim::address_t> dump_pages;
 
   bool parse_err = false;
   for (const std::string& command : commands)
-    parse_err |= handle_config_arg(&machine, &registers, options, command, &dump_pages);
+    parse_err |= handle_config_arg(&address_space, &registers, options, command, &dump_pages);
 
   if (parse_err) {
     logging::eprintln("Error: could not parse all arguments");
@@ -294,18 +296,19 @@ int main(int argc, char** argv) {
   logging::flush();
   logging::println("Baseline state:\n{}", registers);
 
-  x86sim::RunResult result = machine.run();
+  x86sim::RunResult result = machine.run(initial_state, address_space);
+  x86sim::RegisterFile& final_registers = initial_state;
 
   if (result.reason == x86sim::StopReason::x86_exception) {
     logging::eprintln("{}", result);
     return 1;
   }
 
-  logging::eprintln("End state:\n{}", registers);
+  logging::eprintln("End state:\n{}", final_registers);
 
   for (x86sim::address_t addr : dump_pages) {
-    std::vector<std::byte> page(x86sim::Machine::kPageSize);
-    if (auto read = machine.read_memory_into(addr, page)) {
+    std::vector<std::byte> page(x86sim::AddressSpace::kPageSize);
+    if (auto read = address_space.read(addr, page)) {
       logging::eprintln("Dump of memory at {}:", (void*)addr);
       print_hex_bytes(page);
     } else {
@@ -313,7 +316,7 @@ int main(int argc, char** argv) {
     }
   }
 
-  logging::eprintln("\n=== Exiting after full simulation at rip {} ({}) ===\n", registers[x86sim::Register::rip],
+  logging::eprintln("\n=== Exiting after full simulation at rip {} ({}) ===\n", final_registers[x86sim::Register::rip],
                     result.stats);
 
   return 0;

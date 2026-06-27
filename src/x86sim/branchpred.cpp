@@ -10,7 +10,7 @@
 
 #include "branchpred.h"
 #include "stats.h"
-#include "x86sim/logging.h"
+#include "x86sim/logging.hpp"
 
 namespace x86sim {
 

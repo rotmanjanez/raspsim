@@ -10,7 +10,7 @@
 #define _DCACHE_H_
 
 #include "ptlsim.h"
-#include "x86sim/logging.h"
+#include "x86sim/logging.hpp"
 
 namespace x86sim {
 

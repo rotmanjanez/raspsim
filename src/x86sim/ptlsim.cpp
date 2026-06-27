@@ -11,7 +11,7 @@
 #include "globals.h"
 #include "ptlsim.h"
 #include "decode.h"
-#include "x86sim/logging.h"
+#include "x86sim/logging.hpp"
 #include "stats.h"
 
 namespace x86sim {
@@ -26,13 +26,10 @@ bool logenable = 0;
 #endif
 
 MachineImpl::MachineImpl(Machine& owner_, Options config_)
-    : owner(owner_), config(std::move(config_)), bbcache(std::make_unique<BasicBlockCache>()) {}
+    : owner(owner_), callbacks(owner_.callbacks_), config(std::move(config_)),
+      bbcache(std::make_unique<BasicBlockCache>()) {}
 
 MachineImpl::~MachineImpl() = default;
-
-int MachineImpl::run() {
-  return 0;
-}
 
 Context::Context(const Options& config, MachineImpl& core, int vcpuid_) : Context() {
   machine = &core.owner;

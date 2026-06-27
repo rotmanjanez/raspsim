@@ -143,11 +143,11 @@ template<typename T>
 }
 
 [[nodiscard]] address_t page_floor(address_t value) {
-  return value & ~(x86sim::Machine::kPageSize - 1);
+  return value & ~(x86sim::AddressSpace::kPageSize - 1);
 }
 
 [[nodiscard]] address_t page_ceil(address_t value) {
-  const address_t mask = x86sim::Machine::kPageSize - 1;
+  const address_t mask = x86sim::AddressSpace::kPageSize - 1;
   if (value > std::numeric_limits<address_t>::max() - mask)
     throw std::runtime_error("address range overflow");
   return (value + mask) & ~mask;
@@ -164,19 +164,20 @@ template<typename T>
   return protection;
 }
 
-void checked_map(x86sim::Machine& machine, address_t start, std::uint64_t size, x86sim::Protection protection) {
-  auto mapped = machine.map(start, size, protection);
+void checked_map(x86sim::AddressSpace& address_space, address_t start, std::uint64_t size,
+                 x86sim::Protection protection) {
+  auto mapped = address_space.map(start, size, protection);
   if (!mapped)
     throw std::runtime_error("cannot map guest memory");
 }
 
-void checked_write(x86sim::Machine& machine, address_t start, std::span<const std::byte> bytes) {
-  auto written = machine.write_memory(start, bytes);
+void checked_write(x86sim::AddressSpace& address_space, address_t start, std::span<const std::byte> bytes) {
+  auto written = address_space.write(start, bytes);
   if (!written)
     throw std::runtime_error("cannot write guest memory");
 }
 
-[[nodiscard]] LoadedElf load_elf(x86sim::Machine& machine, const std::filesystem::path& path) {
+[[nodiscard]] LoadedElf load_elf(x86sim::AddressSpace& address_space, const std::filesystem::path& path) {
   const auto file = read_file(path);
   const Elf64Ehdr& header = read_struct<Elf64Ehdr>(file, 0);
 
@@ -222,10 +223,10 @@ void checked_write(x86sim::Machine& machine, address_t start, std::span<const st
 
     const address_t map_start = page_floor(phdr.p_vaddr);
     const address_t map_end = page_ceil(phdr.p_vaddr + phdr.p_memsz);
-    checked_map(machine, map_start, map_end - map_start, protection_from_elf(phdr.p_flags));
+    checked_map(address_space, map_start, map_end - map_start, protection_from_elf(phdr.p_flags));
 
     if (phdr.p_filesz != 0) {
-      checked_write(machine, phdr.p_vaddr,
+      checked_write(address_space, phdr.p_vaddr,
                     std::span<const std::byte>(file.data() + phdr.p_offset, static_cast<std::size_t>(phdr.p_filesz)));
     }
 
@@ -241,12 +242,25 @@ void append_word(std::vector<std::byte>& bytes, word_t value) {
     bytes.push_back(static_cast<std::byte>((value >> (i * 8)) & 0xff));
 }
 
-[[nodiscard]] address_t setup_stack(x86sim::Machine& machine, std::span<const std::string> argv,
-                                    const LoadedElf& loaded) {
+[[nodiscard]] address_t setup_stack(x86sim::AddressSpace& address_space, std::span<const std::string> argv,
+                                    std::span<const std::string> envp, const LoadedElf& loaded) {
   const address_t stack_base = stack_top - stack_size;
-  checked_map(machine, stack_base, stack_size, x86sim::Protection::read | x86sim::Protection::write);
+  checked_map(address_space, stack_base, stack_size, x86sim::Protection::read | x86sim::Protection::write);
 
   address_t cursor = stack_top;
+  std::vector<address_t> envp_addresses(envp.size());
+  for (std::size_t i = envp.size(); i > 0; --i) {
+    const std::string& value = envp[i - 1];
+    if (value.size() + 1 > cursor - stack_base)
+      throw std::runtime_error("environment stack overflow");
+
+    cursor -= value.size() + 1;
+    std::vector<std::byte> bytes(value.size() + 1);
+    std::memcpy(bytes.data(), value.data(), value.size());
+    checked_write(address_space, cursor, bytes);
+    envp_addresses[i - 1] = cursor;
+  }
+
   std::vector<address_t> argv_addresses(argv.size());
   for (std::size_t i = argv.size(); i > 0; --i) {
     const std::string& arg = argv[i - 1];
@@ -256,7 +270,7 @@ void append_word(std::vector<std::byte>& bytes, word_t value) {
     cursor -= arg.size() + 1;
     std::vector<std::byte> bytes(arg.size() + 1);
     std::memcpy(bytes.data(), arg.data(), arg.size());
-    checked_write(machine, cursor, bytes);
+    checked_write(address_space, cursor, bytes);
     argv_addresses[i - 1] = cursor;
   }
 
@@ -266,7 +280,7 @@ void append_word(std::vector<std::byte>& bytes, word_t value) {
       std::byte{0x6d}, std::byte{0x21}, std::byte{0x10}, std::byte{0x32}, std::byte{0x54}, std::byte{0x76},
       std::byte{0x98}, std::byte{0xba}, std::byte{0xdc}, std::byte{0xfe},
   };
-  checked_write(machine, cursor, random_bytes);
+  checked_write(address_space, cursor, random_bytes);
   const address_t random_address = cursor;
 
   cursor &= ~static_cast<address_t>(0xf);
@@ -292,6 +306,8 @@ void append_word(std::vector<std::byte>& bytes, word_t value) {
   for (address_t arg_address : argv_addresses)
     words.push_back(arg_address);
   words.push_back(0); // argv terminator
+  for (address_t env_address : envp_addresses)
+    words.push_back(env_address);
   words.push_back(0); // envp terminator
   if (loaded.phdr != 0) {
     words.push_back(at_phdr);
@@ -302,7 +318,7 @@ void append_word(std::vector<std::byte>& bytes, word_t value) {
     words.push_back(loaded.phnum);
   }
   words.push_back(at_pagesz);
-  words.push_back(x86sim::Machine::kPageSize);
+  words.push_back(x86sim::AddressSpace::kPageSize);
   words.push_back(at_base);
   words.push_back(0);
   words.push_back(at_flags);
@@ -335,9 +351,25 @@ void append_word(std::vector<std::byte>& bytes, word_t value) {
   stack_words.reserve(words.size() * sizeof(word_t));
   for (word_t word : words)
     append_word(stack_words, word);
-  checked_write(machine, cursor, stack_words);
+  checked_write(address_space, cursor, stack_words);
 
   return cursor;
+}
+
+[[nodiscard]] std::vector<std::string> guest_environment() {
+  std::vector<std::string> env;
+
+  if (const char* path = std::getenv("PATH"))
+    env.push_back("PATH=.:" + std::string(path));
+  else
+    env.emplace_back("PATH=.:/bin:/usr/bin");
+
+  for (const char* name : {"SQLITE_TESTDIR", "TMPDIR", "HOME", "USER"}) {
+    if (const char* value = std::getenv(name))
+      env.push_back(std::string(name) + "=" + value);
+  }
+
+  return env;
 }
 
 void usage(const char* argv0) {
@@ -397,6 +429,7 @@ int main(int argc, char** argv) {
     const std::filesystem::path program_path = resolve_program(argv[program_index]);
 
     int exit_status = 0;
+    auto processes = x86sim::linux_syscalls::make_process_table();
     auto callbacks = x86sim::linux_syscalls::host(
         x86sim::linux_syscalls::SysRead{} | x86sim::linux_syscalls::SysReadlink{} | x86sim::linux_syscalls::SysWrite{} |
         x86sim::linux_syscalls::SysPreadPwrite{} | x86sim::linux_syscalls::SysOpen{} |
@@ -405,14 +438,15 @@ int main(int argc, char** argv) {
         x86sim::linux_syscalls::SysFileSystem{} | x86sim::linux_syscalls::SysLseek{} |
         x86sim::linux_syscalls::SysIoctl{} | x86sim::linux_syscalls::SysFcntl{} | x86sim::linux_syscalls::SysSocket{} |
         x86sim::linux_syscalls::SysConnect{} | x86sim::linux_syscalls::SysSelect{} |
-        x86sim::linux_syscalls::SysProcess{} | x86sim::linux_syscalls::SysFutex{} |
+        x86sim::linux_syscalls::SysProcess{processes} | x86sim::linux_syscalls::SysFutex{} |
         x86sim::linux_syscalls::SysSignals{} | x86sim::linux_syscalls::SysBrk{} |
-        x86sim::linux_syscalls::SysArchPrctl{} | x86sim::linux_syscalls::SysGetIdentity{} |
+        x86sim::linux_syscalls::SysArchPrctl{} | x86sim::linux_syscalls::SysGetIdentity{processes} |
         x86sim::linux_syscalls::SysUname{} | x86sim::linux_syscalls::SysGetcwd{} | x86sim::linux_syscalls::SysTime{} |
         x86sim::linux_syscalls::SysSetTidAddress{} | x86sim::linux_syscalls::SysSetRobustList{} |
         x86sim::linux_syscalls::SysRseq{} | x86sim::linux_syscalls::SysPrlimit64{} | x86sim::linux_syscalls::SysMmap{} |
         x86sim::linux_syscalls::SysMunmap{} | x86sim::linux_syscalls::SysMremap{} |
-        x86sim::linux_syscalls::SysExit{&exit_status} | x86sim::linux_syscalls::SysExitGroup{&exit_status});
+        x86sim::linux_syscalls::SysExit{&exit_status, processes} |
+        x86sim::linux_syscalls::SysExitGroup{&exit_status, processes});
 
     x86sim::Options options;
     options.core = core;
@@ -422,20 +456,21 @@ int main(int argc, char** argv) {
     options.log.log_on_console = false;
 
     x86sim::Machine machine(callbacks, options);
+    x86sim::AddressSpace address_space;
     std::vector<std::string> guest_argv;
     guest_argv.reserve(static_cast<std::size_t>(argc - program_index));
     guest_argv.emplace_back(argv[program_index]);
     for (int i = program_index + 1; i < argc; ++i)
       guest_argv.emplace_back(argv[i]);
+    const std::vector<std::string> guest_envp = guest_environment();
 
-    const LoadedElf loaded = load_elf(machine, program_path);
-    const address_t rsp = setup_stack(machine, guest_argv, loaded);
+    const LoadedElf loaded = load_elf(address_space, program_path);
+    const address_t rsp = setup_stack(address_space, guest_argv, guest_envp, loaded);
 
-    x86sim::RegisterFile& registers = machine.register_file(0);
-    registers[x86sim::Register::rip] = loaded.entry;
-    registers[x86sim::Register::rsp] = rsp;
-
-    const x86sim::RunResult result = machine.run();
+    x86sim::CpuState initial_state;
+    initial_state[x86sim::Register::rip] = loaded.entry;
+    initial_state[x86sim::Register::rsp] = rsp;
+    const x86sim::RunResult result = machine.run(initial_state, address_space);
     switch (result.reason) {
     case x86sim::StopReason::guest_exit:
       return exit_status;
