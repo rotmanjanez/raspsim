@@ -1,6 +1,6 @@
 [project]
 name = "x86sim"
-version = "0.1.3"
+version = "0.1.4"
 authors = [
   { name="Janez Rotman", email="janez.rotman@tum.de" },
 ]
