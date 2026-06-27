@@ -26,7 +26,7 @@ jobs:
           python -m pip install --upgrade build
           python -m build --sdist
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-sdist
           path: dist/*.tar.gz
@@ -62,7 +62,7 @@ jobs:
           CIBW_TEST_REQUIRES: "pyelftools"
           CIBW_TEST_COMMAND: "python -c \"import x86sim; x86sim.Core()\""
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-wheels
           path: wheelhouse/*.whl
@@ -82,7 +82,7 @@ jobs:
 
     steps:
       - name: Download all distributions
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           pattern: dist-*
           merge-multiple: true
