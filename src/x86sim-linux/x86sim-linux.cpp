@@ -4,15 +4,18 @@
 #include "x86sim/x86sim.hpp"
 
 #include <array>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -375,7 +378,8 @@ void append_word(std::vector<std::byte>& bytes, word_t value) {
 }
 
 void usage(const char* argv0) {
-  std::cerr << "usage: " << argv0 << " [--core=seq|ooo] [--seq|--ooo] [--] PROGRAM [ARG...]\n";
+  std::cerr << "usage: " << argv0
+            << " [--core=seq|ooo] [--seq|--ooo] [--stopinsns N] [--dump-regs] [--] PROGRAM [ARG...]\n";
 }
 
 [[nodiscard]] x86sim::CoreModel parse_core(std::string_view value) {
@@ -386,10 +390,45 @@ void usage(const char* argv0) {
   throw std::runtime_error("unknown core model: " + std::string(value));
 }
 
+[[nodiscard]] std::uint64_t parse_u64(std::string_view name, std::string_view value) {
+  int base = 10;
+  if (value.starts_with("0x") || value.starts_with("0X")) {
+    value.remove_prefix(2);
+    base = 16;
+  }
+  if (value.empty())
+    throw std::runtime_error("missing value for " + std::string(name));
+
+  std::uint64_t result = 0;
+  const char* begin = value.data();
+  const char* end = begin + value.size();
+  auto [ptr, ec] = std::from_chars(begin, end, result, base);
+  if (ec != std::errc() || ptr != end)
+    throw std::runtime_error("invalid value for " + std::string(name) + ": " + std::string(value));
+  return result;
+}
+
+void dump_registers(const x86sim::RegisterFile& registers) {
+  static constexpr x86sim::Register regs[] = {
+      x86sim::Register::rax, x86sim::Register::rbx,   x86sim::Register::rcx, x86sim::Register::rdx,
+      x86sim::Register::rsp, x86sim::Register::rbp,   x86sim::Register::rsi, x86sim::Register::rdi,
+      x86sim::Register::r8,  x86sim::Register::r9,    x86sim::Register::r10, x86sim::Register::r11,
+      x86sim::Register::r12, x86sim::Register::r13,   x86sim::Register::r14, x86sim::Register::r15,
+      x86sim::Register::rip, x86sim::Register::flags,
+  };
+
+  std::cerr << "x86sim-regs";
+  for (x86sim::Register reg : regs)
+    std::cerr << std::format(" {}=0x{:016x}", reg, registers[reg]);
+  std::cerr << "\n";
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
   x86sim::CoreModel core = x86sim::CoreModel::sequential;
+  bool dump_regs = false;
+  std::optional<std::uint64_t> stopinsns;
   int program_index = 1;
   for (; program_index < argc; ++program_index) {
     const std::string_view arg(argv[program_index]);
@@ -409,9 +448,45 @@ int main(int argc, char** argv) {
       core = x86sim::CoreModel::out_of_order;
       continue;
     }
+    if (arg == "--dump-regs") {
+      dump_regs = true;
+      continue;
+    }
+    if (arg == "--stopinsns") {
+      if (++program_index >= argc) {
+        std::cerr << "x86sim-linux: missing argument for --stopinsns\n";
+        usage(argv[0]);
+        return 2;
+      }
+      try {
+        stopinsns = parse_u64("--stopinsns", argv[program_index]);
+      } catch (const std::exception& error) {
+        std::cerr << "x86sim-linux: " << error.what() << "\n";
+        usage(argv[0]);
+        return 2;
+      }
+      continue;
+    }
     constexpr std::string_view core_prefix = "--core=";
     if (arg.starts_with(core_prefix)) {
-      core = parse_core(arg.substr(core_prefix.size()));
+      try {
+        core = parse_core(arg.substr(core_prefix.size()));
+      } catch (const std::exception& error) {
+        std::cerr << "x86sim-linux: " << error.what() << "\n";
+        usage(argv[0]);
+        return 2;
+      }
+      continue;
+    }
+    constexpr std::string_view stopinsns_prefix = "--stopinsns=";
+    if (arg.starts_with(stopinsns_prefix)) {
+      try {
+        stopinsns = parse_u64("--stopinsns", arg.substr(stopinsns_prefix.size()));
+      } catch (const std::exception& error) {
+        std::cerr << "x86sim-linux: " << error.what() << "\n";
+        usage(argv[0]);
+        return 2;
+      }
       continue;
     }
     if (arg.starts_with("--")) {
@@ -456,6 +531,8 @@ int main(int argc, char** argv) {
     options.log.log_filename.clear();
     options.log.loglevel = 100;
     options.log.log_on_console = false;
+    if (stopinsns)
+      options.stop_at_user_insns = *stopinsns;
 
     x86sim::Machine machine(callbacks, options);
     x86sim::AddressSpace address_space;
@@ -473,6 +550,10 @@ int main(int argc, char** argv) {
     initial_state[x86sim::Register::rip] = loaded.entry;
     initial_state[x86sim::Register::rsp] = rsp;
     const x86sim::RunResult result = machine.run(initial_state, address_space);
+    if (dump_regs &&
+        (result.reason == x86sim::StopReason::guest_exit || result.reason == x86sim::StopReason::instruction_limit))
+      dump_registers(initial_state);
+
     switch (result.reason) {
     case x86sim::StopReason::guest_exit:
       return exit_status;
@@ -486,8 +567,9 @@ int main(int argc, char** argv) {
       std::cerr << "x86sim-linux: x86 exception: " << result.message << "\n";
       return 1;
     case x86sim::StopReason::instruction_limit:
-      std::cerr << "x86sim-linux: instruction limit reached\n";
-      return 1;
+      if (!stopinsns)
+        std::cerr << "x86sim-linux: instruction limit reached\n";
+      return stopinsns ? 0 : 1;
     case x86sim::StopReason::host_request:
       std::cerr << "x86sim-linux: stopped by host request";
       if (!result.message.empty())
