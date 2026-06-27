@@ -38,10 +38,9 @@ class Machine(_Machine):
                 ``/proc/self/exe``). Returning ``None`` yields ``-ENOENT``. When
                 unset, the guest's readlink returns ``-ENOSYS``.
             core: CPU model, ``"ooo"`` (out-of-order, default) or ``"seq"``
-                (sequential). The sequential core is slower but executes
-                unaligned memory accesses correctly; the out-of-order core does
-                not, so running glibc (its string routines use unaligned SSE)
-                requires ``core="seq"``.
+                (sequential). Both execute unaligned memory accesses correctly
+                and can run glibc; the sequential core is simpler and slower,
+                the out-of-order core is the cycle-accurate default.
         """
         super().__init__(
             glibc=glibc,

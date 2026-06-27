@@ -543,7 +543,9 @@ bool ThreadContext::fetch() {
       if unlikely (config.log.event_log_enabled)
         eventlog.add(EVENT_FETCH_SPLIT, transop);
       split_unaligned(transop, unaligned_ldst_buf);
-      assert(unaligned_ldst_buf.get(transop, synthop));
+      bool got_split_uop = unaligned_ldst_buf.get(transop, synthop);
+      assert(got_split_uop);
+      (void)got_split_uop;
     }
 
     assert(transop.bbindex == current_basic_block_transop_index);

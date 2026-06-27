@@ -131,9 +131,9 @@ default:
   glibc reads at startup). Returning `None` yields `-ENOENT`; without a callback
   the syscall returns `-ENOSYS`. No real filesystem is touched.
 - `core="seq"` selects the sequential CPU model instead of the default
-  out-of-order one (`core="ooo"`). It is slower but handles unaligned memory
-  accesses correctly; the out-of-order core does not, so running glibc — whose
-  string routines use unaligned SSE — requires `core="seq"`.
+  out-of-order one (`core="ooo"`). Both cores execute unaligned memory accesses
+  correctly and can run glibc; the sequential core is simpler and slower, the
+  out-of-order core is the cycle-accurate default.
 
 These features require the guest to use the 64-bit `syscall` instruction (the
 Linux syscall ABI: number in `rax`, arguments in `rdi`, `rsi`, `rdx`, ...).
@@ -178,14 +178,14 @@ sim.run()  # glibc syscalls succeed; with Machine() (glibc=False) they would rai
 
 A static, non-PIE glibc executable can run end to end once you build its initial
 stack (argc/argv/envp and the auxiliary vector — see
-`tests/python/elfload.py` for a reference loader) and select the sequential core:
+`tests/python/elfload.py` for a reference loader). It runs on either core:
 
 ```python
 import io
 from x86sim import Machine
 
 out = io.BytesIO()
-sim = Machine(glibc=True, core="seq", stdout=out, readlink=lambda p: "/hello")
+sim = Machine(glibc=True, stdout=out, readlink=lambda p: "/hello")
 # ... map the ELF's PT_LOAD segments and lay out the argc/argv/envp/auxv stack ...
 sim.run()  # __libc_start_main -> main -> write(1, ...) -> exit_group
 print(out.getvalue())
