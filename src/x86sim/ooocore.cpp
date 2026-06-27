@@ -7,7 +7,6 @@
 // Copyright 2006-2008 Hui Zeng <hzeng@cs.binghamton.edu>
 //
 
-#include <_string.h>
 #include <cassert>
 #include <cmath>
 #include <cstdlib>
