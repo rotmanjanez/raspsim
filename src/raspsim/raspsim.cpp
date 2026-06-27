@@ -280,7 +280,7 @@ int main(int argc, char** argv) {
 
   CliHost host;
   x86sim::Machine machine(host, options);
-  x86sim::AddressSpace address_space;
+  x86sim::AddressSpace address_space(machine);
   x86sim::CpuState initial_state;
   x86sim::RegisterFile& registers = initial_state;
   std::vector<x86sim::address_t> dump_pages;

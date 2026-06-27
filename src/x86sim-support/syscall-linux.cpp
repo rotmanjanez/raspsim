@@ -435,6 +435,44 @@ std::optional<SyscallResult> SysMunmap::try_syscall(Machine& machine, ProcessId 
   return detail::return_value(context, 0);
 }
 
+std::optional<SyscallResult> SysMprotect::try_syscall(Machine& machine, ProcessId context_id, CpuState& context,
+                                                      AddressSpace& space, SyscallKind kind) noexcept {
+  if (!detail::handles(context, kind, detail::syscall_mprotect))
+    return std::nullopt;
+
+  const address_t address = detail::syscall_arg(context, 0);
+  const word_t length = detail::syscall_arg(context, 1);
+  const word_t prot = detail::syscall_arg(context, 2);
+
+  if (!detail::page_aligned(address))
+    return detail::return_error(context, detail::linux_einval);
+
+  auto protection = detail::protection_from_linux(prot);
+  if (!protection)
+    return detail::return_error(context, detail::linux_einval);
+
+  // A zero-length mprotect is a no-op success on Linux.
+  if (length == 0)
+    return detail::return_value(context, 0);
+
+  auto aligned_length = detail::page_align_up(length);
+  if (!aligned_length)
+    return detail::return_error(context, detail::linux_enomem);
+
+  // AddressSpace::protect transparently invalidates any decoded blocks cached
+  // for the range, so a later fetch re-translates under the new protection.
+  auto changed = space.protect(address, *aligned_length, *protection);
+  if (!changed) {
+    // mprotect over a hole reports ENOMEM rather than the EFAULT that the
+    // generic unmapped-address mapping would yield.
+    if (changed.error() == MemoryError::unmapped_address)
+      return detail::return_error(context, detail::linux_enomem);
+    return detail::return_error(context, detail::memory_error_to_linux(changed.error()));
+  }
+
+  return detail::return_value(context, 0);
+}
+
 std::optional<SyscallResult> SysMremap::try_syscall(Machine& machine, ProcessId context_id, CpuState& context,
                                                     AddressSpace& space, SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_mremap))

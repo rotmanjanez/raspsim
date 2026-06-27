@@ -177,6 +177,9 @@ private:
   // The core delivers guest syscalls/cpuid to callbacks_ and records the
   // resulting stop in MachineImpl::pending_stop, so it owns those internals.
   friend struct MachineImpl;
+  // An AddressSpace bound to this Machine reads machine_ to reach the code cache
+  // it must invalidate on map/unmap/protect.
+  friend class AddressSpace;
 
   HostCallbacks& callbacks_;
   Options options_;

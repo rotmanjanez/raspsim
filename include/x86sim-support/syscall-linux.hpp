@@ -209,6 +209,11 @@ struct SysMunmap {
                                                          SyscallKind) noexcept;
 };
 
+struct SysMprotect {
+  [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, ProcessId, CpuState&, AddressSpace&,
+                                                         SyscallKind) noexcept;
+};
+
 struct SysMremap {
   constexpr explicit SysMremap(address_t next_mapping_address = detail::default_mmap_base + 0x8000000000ULL) noexcept
       : next_mapping_address(next_mapping_address) {}

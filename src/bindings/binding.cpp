@@ -404,37 +404,27 @@ private:
   // not touch the (unused) ProcessTable. No other ProcessTable-backed handlers
   // (fork/wait/...) are wired in.
   decltype(x86sim::linux_syscalls::SysBrk{} | x86sim::linux_syscalls::SysMmap{} | x86sim::linux_syscalls::SysMunmap{} |
-           x86sim::linux_syscalls::SysMremap{} | x86sim::linux_syscalls::SysArchPrctl{} |
-           x86sim::linux_syscalls::SysSetTidAddress{} | x86sim::linux_syscalls::SysSetRobustList{} |
-           x86sim::linux_syscalls::SysRseq{} | x86sim::linux_syscalls::SysPrlimit64{} |
-           x86sim::linux_syscalls::SysUname{} | x86sim::linux_syscalls::SysGetIdentity{} |
-           x86sim::linux_syscalls::SysFutex{} | x86sim::linux_syscalls::SysSignals{} |
-           x86sim::linux_syscalls::SysGetrandom{}) glibc_syscalls =
+           x86sim::linux_syscalls::SysMprotect{} | x86sim::linux_syscalls::SysMremap{} |
+           x86sim::linux_syscalls::SysArchPrctl{} | x86sim::linux_syscalls::SysSetTidAddress{} |
+           x86sim::linux_syscalls::SysSetRobustList{} | x86sim::linux_syscalls::SysRseq{} |
+           x86sim::linux_syscalls::SysPrlimit64{} | x86sim::linux_syscalls::SysUname{} |
+           x86sim::linux_syscalls::SysGetIdentity{} | x86sim::linux_syscalls::SysFutex{} |
+           x86sim::linux_syscalls::SysSignals{} | x86sim::linux_syscalls::SysGetrandom{}) glibc_syscalls =
       x86sim::linux_syscalls::SysBrk{} | x86sim::linux_syscalls::SysMmap{} | x86sim::linux_syscalls::SysMunmap{} |
-      x86sim::linux_syscalls::SysMremap{} | x86sim::linux_syscalls::SysArchPrctl{} |
-      x86sim::linux_syscalls::SysSetTidAddress{} | x86sim::linux_syscalls::SysSetRobustList{} |
-      x86sim::linux_syscalls::SysRseq{} | x86sim::linux_syscalls::SysPrlimit64{} | x86sim::linux_syscalls::SysUname{} |
+      x86sim::linux_syscalls::SysMprotect{} | x86sim::linux_syscalls::SysMremap{} |
+      x86sim::linux_syscalls::SysArchPrctl{} | x86sim::linux_syscalls::SysSetTidAddress{} |
+      x86sim::linux_syscalls::SysSetRobustList{} | x86sim::linux_syscalls::SysRseq{} |
+      x86sim::linux_syscalls::SysPrlimit64{} | x86sim::linux_syscalls::SysUname{} |
       x86sim::linux_syscalls::SysGetIdentity{} | x86sim::linux_syscalls::SysFutex{} |
       x86sim::linux_syscalls::SysSignals{} | x86sim::linux_syscalls::SysGetrandom{};
 };
 
 class PyMachine {
 public:
-  PyMachine(const char* logfile, bool sse, bool x87, bool perfect_cache, bool static_branchpred, bool glibc,
-            py::object stdin_obj, py::object stdout_obj, py::object stdout_err, py::object readlink_cb,
-            const char* core) {
-    host.enable_glibc = glibc;
-    if (!readlink_cb.is_none()) {
-      if (!py::hasattr(readlink_cb, "__call__"))
-        throw py::value_error("readlink must be a callable: readlink(path: str) -> str | None");
-      host.readlink_cb = std::move(readlink_cb);
-    }
-    // Map guest fds 0/1/2 to the supplied Python file-like objects (None leaves
-    // the fd unconfigured, so the guest sees an unsupported syscall on it).
-    map_stream(0, std::move(stdin_obj), "read", "stdin");
-    map_stream(1, std::move(stdout_obj), "write", "stdout");
-    map_stream(2, std::move(stdout_err), "write", "stderr");
-
+  // Build the machine options up front so the Machine (and the AddressSpace
+  // bound to it) can be constructed in the member initializer list.
+  static x86sim::Options build_options(const char* logfile, bool sse, bool x87, bool perfect_cache,
+                                       bool static_branchpred, const char* core) {
     x86sim::Options options;
     options.sse = sse;
     options.x87 = x87;
@@ -455,7 +445,26 @@ public:
     else
       throw py::value_error(R"(core must be one of "ooo"/"out_of_order" or "seq"/"sequential")");
 
-    machine = std::make_unique<x86sim::Machine>(host, options);
+    return options;
+  }
+
+  PyMachine(const char* logfile, bool sse, bool x87, bool perfect_cache, bool static_branchpred, bool glibc,
+            py::object stdin_obj, py::object stdout_obj, py::object stdout_err, py::object readlink_cb,
+            const char* core)
+      : machine(std::make_unique<x86sim::Machine>(
+            host, build_options(logfile, sse, x87, perfect_cache, static_branchpred, core))),
+        address_space(*machine) {
+    host.enable_glibc = glibc;
+    if (!readlink_cb.is_none()) {
+      if (!py::hasattr(readlink_cb, "__call__"))
+        throw py::value_error("readlink must be a callable: readlink(path: str) -> str | None");
+      host.readlink_cb = std::move(readlink_cb);
+    }
+    // Map guest fds 0/1/2 to the supplied Python file-like objects (None leaves
+    // the fd unconfigured, so the guest sees an unsupported syscall on it).
+    map_stream(0, std::move(stdin_obj), "read", "stdin");
+    map_stream(1, std::move(stdout_obj), "write", "stdout");
+    map_stream(2, std::move(stdout_err), "write", "stderr");
   }
 
   ~PyMachine() = default;
@@ -481,8 +490,9 @@ public:
 
   PyHost host;
   x86sim::CpuState cpu_state;
-  x86sim::AddressSpace address_space;
+  // Declared (and therefore constructed) before address_space, which binds to it.
   std::unique_ptr<x86sim::Machine> machine;
+  x86sim::AddressSpace address_space;
 
 private:
   // Validate that a supplied stream exposes the attribute the guest will need,

@@ -12,6 +12,9 @@
 
 namespace x86sim {
 
+struct MachineImpl;
+class Machine;
+
 using address_t = std::uint64_t;
 
 enum class Protection : std::uint8_t { none = 0, read = 1, write = 2, execute = 4 };
@@ -39,6 +42,14 @@ public:
   using Page = std::array<std::byte, kPageSize>;
 
   AddressSpace();
+  // Bind the address space to the machine that will execute against it. Once
+  // bound, map/unmap/protect transparently invalidate any decoded basic blocks
+  // the machine has cached for the affected pages, keeping guest
+  // mmap/munmap/mprotect (and direct caller edits) coherent with the code cache:
+  // a page's execute permission is baked into a decoded block at translation
+  // time, so a stale block would otherwise keep executing under the old
+  // protection. Construct the Machine first, then the AddressSpace from it.
+  explicit AddressSpace(Machine& machine);
   AddressSpace(const AddressSpace&);
   AddressSpace& operator=(const AddressSpace&);
   AddressSpace(AddressSpace&&) noexcept;
@@ -47,6 +58,11 @@ public:
 
   [[nodiscard]] std::expected<void, MemoryError> map(address_t start, std::uint64_t size, Protection) noexcept;
   void unmap(address_t start, std::uint64_t size) noexcept;
+  // Changes the protection bits of an already-mapped range, leaving page
+  // contents untouched. The whole range (rounded out to page boundaries) must
+  // be mapped; if any page in it is unmapped, nothing changes and
+  // MemoryError::unmapped_address is returned.
+  [[nodiscard]] std::expected<void, MemoryError> protect(address_t start, std::uint64_t size, Protection) noexcept;
   [[nodiscard]] std::expected<void, MemoryError> read(address_t start, std::span<std::byte> out) const noexcept;
   [[nodiscard]] std::expected<void, MemoryError> write(address_t start, std::span<const std::byte>) noexcept;
   [[nodiscard]] std::unique_ptr<AddressSpace> clone_deep() const;
@@ -64,6 +80,11 @@ public:
   void cleardirty(address_t mfn);
 
 private:
+  // Drop cached decoded basic blocks overlapping [start, start + size) from the
+  // attached machine's code cache. No-op when detached. Called after every
+  // mutation that can change what bytes/permissions a page presents to a fetch.
+  void invalidate_decoded_code(address_t start, std::uint64_t size) noexcept;
+
   // Shadow page-attribute tables (read/write/exec/dirty). These are an
   // implementation detail of the accessibility checks above and never escape
   // the class.
@@ -90,6 +111,11 @@ private:
   std::unique_ptr<ShadowMap> writemap_;
   std::unique_ptr<ShadowMap> execmap_;
   std::unique_ptr<ShadowMap> dirtymap_;
+
+  // Non-owning back-reference to the executing machine, used only to invalidate
+  // its code cache on mutation. Null until Machine::run attaches one; a copy
+  // (e.g. clone_deep for fork) inherits it since it runs on the same machine.
+  MachineImpl* machine_ = nullptr;
 };
 
 } // namespace x86sim

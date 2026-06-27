@@ -60,6 +60,7 @@ inline constexpr word_t syscall_fstat = 5;
 inline constexpr word_t syscall_lstat = 6;
 inline constexpr word_t syscall_lseek = 8;
 inline constexpr word_t syscall_mmap = 9;
+inline constexpr word_t syscall_mprotect = 10;
 inline constexpr word_t syscall_munmap = 11;
 inline constexpr word_t syscall_brk = 12;
 inline constexpr word_t syscall_rt_sigaction = 13;

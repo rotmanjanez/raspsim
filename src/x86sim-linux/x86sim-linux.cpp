@@ -521,8 +521,9 @@ int main(int argc, char** argv) {
         x86sim::linux_syscalls::SysUname{} | x86sim::linux_syscalls::SysGetcwd{} | x86sim::linux_syscalls::SysTime{} |
         x86sim::linux_syscalls::SysSetTidAddress{} | x86sim::linux_syscalls::SysSetRobustList{} |
         x86sim::linux_syscalls::SysRseq{} | x86sim::linux_syscalls::SysPrlimit64{} | x86sim::linux_syscalls::SysMmap{} |
-        x86sim::linux_syscalls::SysMunmap{} | x86sim::linux_syscalls::SysMremap{} |
-        x86sim::linux_syscalls::SysGetrandom{} | x86sim::linux_syscalls::SysExit{&exit_status, processes} |
+        x86sim::linux_syscalls::SysMunmap{} | x86sim::linux_syscalls::SysMprotect{} |
+        x86sim::linux_syscalls::SysMremap{} | x86sim::linux_syscalls::SysGetrandom{} |
+        x86sim::linux_syscalls::SysExit{&exit_status, processes} |
         x86sim::linux_syscalls::SysExitGroup{&exit_status, processes});
 
     x86sim::Options options;
@@ -535,7 +536,7 @@ int main(int argc, char** argv) {
       options.stop_at_user_insns = *stopinsns;
 
     x86sim::Machine machine(callbacks, options);
-    x86sim::AddressSpace address_space;
+    x86sim::AddressSpace address_space(machine);
     std::vector<std::string> guest_argv;
     guest_argv.reserve(static_cast<std::size_t>(argc - program_index));
     guest_argv.emplace_back(argv[program_index]);

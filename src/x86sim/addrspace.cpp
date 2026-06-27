@@ -1,6 +1,9 @@
 #include "x86sim/addrspace.hpp"
 
+#include "decode.h"
+#include "ptlsim.h"
 #include "x86sim/logging.hpp"
+#include "x86sim/x86sim.hpp"
 
 #include <algorithm>
 #include <array>
@@ -84,11 +87,19 @@ AddressSpace::AddressSpace()
     : readmap_(std::make_unique<ShadowMap>()), writemap_(std::make_unique<ShadowMap>()),
       execmap_(std::make_unique<ShadowMap>()), dirtymap_(std::make_unique<ShadowMap>()) {}
 
+AddressSpace::AddressSpace(Machine& machine) : AddressSpace() {
+  machine_ = machine.machine_.get();
+}
+
 AddressSpace::AddressSpace(const AddressSpace& other) : AddressSpace() {
   for (const auto& [address, page] : other.mapped_mem_) {
     map_or_throw(address, kPageSize, other.protection_at(address));
     std::memcpy(mapped_mem_.at(address)->data(), page->data(), kPageSize);
   }
+  // A clone runs on the same machine as its source (e.g. fork), so it inherits
+  // the back-reference. map_or_throw above ran while machine_ was still null, so
+  // it intentionally did not invalidate anything.
+  machine_ = other.machine_;
 }
 
 AddressSpace& AddressSpace::operator=(const AddressSpace& other) {
@@ -118,6 +129,9 @@ std::expected<void, MemoryError> AddressSpace::map(address_t start, std::uint64_
   } catch (...) {
     return std::unexpected(MemoryError::mapping_failed);
   }
+  // A fixed mapping can land on top of pages that already held code, so drop any
+  // blocks decoded for the range.
+  invalidate_decoded_code(start, size);
   return {};
 }
 
@@ -133,6 +147,27 @@ void AddressSpace::unmap(address_t start, std::uint64_t size) noexcept {
   for (address_t page = start; page < *end; page += kPageSize)
     mapped_mem_.erase(page);
   setattr(start, *end - start, Protection::none);
+  invalidate_decoded_code(start, *end - start);
+}
+
+std::expected<void, MemoryError> AddressSpace::protect(address_t start, std::uint64_t size, Protection prot) noexcept {
+  if (size == 0)
+    return std::unexpected(MemoryError::zero_size);
+  if (range_overflows(start, size))
+    return std::unexpected(MemoryError::unmapped_address);
+
+  start = page_floor(start);
+  const auto end = page_ceil(start + size);
+  if (!end)
+    return std::unexpected(MemoryError::unmapped_address);
+
+  for (address_t page = start; page < *end; page += kPageSize)
+    if (!mapped_mem_.contains(page))
+      return std::unexpected(MemoryError::unmapped_address);
+
+  setattr(start, *end - start, prot);
+  invalidate_decoded_code(start, *end - start);
+  return {};
 }
 
 std::expected<void, MemoryError> AddressSpace::read(address_t start, std::span<std::byte> out) const noexcept {
@@ -235,6 +270,20 @@ void AddressSpace::setdirty(address_t mfn) {
 
 void AddressSpace::cleardirty(address_t mfn) {
   make_page_inaccessible(mfn << page_bits, *dirtymap_);
+}
+
+void AddressSpace::invalidate_decoded_code(address_t start, std::uint64_t size) noexcept {
+  if (!machine_ || !machine_->bbcache || size == 0)
+    return;
+
+  // The code cache indexes blocks by page frame number (virtual address >> 12,
+  // matching RIPVirtPhys::mfnlo); invalidate every page the range touches. This
+  // runs from the syscall handlers, after the core has flushed its pipeline, so
+  // no in-flight block references the pages being dropped.
+  const address_t first_mfn = page_floor(start) >> page_bits;
+  const address_t last_mfn = (start + (size - 1)) >> page_bits;
+  for (address_t mfn = first_mfn; mfn <= last_mfn; ++mfn)
+    machine_->bbcache->invalidate_page(*this, mfn, INVALIDATE_REASON_DIRTY);
 }
 
 void AddressSpace::map_or_throw(address_t start, std::uint64_t size, Protection prot) {
