@@ -53,8 +53,12 @@ jobs:
           CIBW_ARCHS_LINUX: "x86_64"
           CIBW_MANYLINUX_X86_64_IMAGE: "manylinux_2_28"
           CIBW_BEFORE_ALL_LINUX: "dnf install -y gcc-toolset-14-gcc-c++ || dnf install -y gcc-toolset-13-gcc-c++"
+          # CXXFLAGS silences -Winvalid-offsetof: several simulator structs use
+          # C-style layout idioms on non-standard-layout types, so offsetof is
+          # only conditionally-supported and the gcc-toolset warns at every site.
           CIBW_ENVIRONMENT_LINUX: >-
             PATH=/opt/rh/gcc-toolset-14/root/usr/bin:/opt/rh/gcc-toolset-13/root/usr/bin:$PATH
+            CXXFLAGS=-Wno-invalid-offsetof
           CIBW_TEST_REQUIRES: "pyelftools"
           CIBW_TEST_COMMAND: "python -c \"import x86sim; x86sim.Core()\""
 

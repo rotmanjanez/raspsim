@@ -36,7 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Configure
-        run: cmake --preset release -DSQLITE_TEST_SUITE=extraquick -DSQLITE_TEST_CORES=seq
+        run: cmake --preset release -DCMAKE_CXX_FLAGS=-Wno-invalid-offsetof -DSQLITE_TEST_SUITE=extraquick -DSQLITE_TEST_CORES=seq
       - name: Build
         run: cmake --build --preset release --target x86sim-linux
       - name: Test (seq, extraquick)
@@ -49,7 +49,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Configure
-        run: cmake --preset release -DSQLITE_TEST_SUITE=extraquick -DSQLITE_TEST_CORES=ooo
+        run: cmake --preset release -DCMAKE_CXX_FLAGS=-Wno-invalid-offsetof -DSQLITE_TEST_SUITE=extraquick -DSQLITE_TEST_CORES=ooo
       - name: Build
         run: cmake --build --preset release --target x86sim-linux
       - name: Test (ooo, extraquick)
@@ -66,7 +66,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Configure
-        run: cmake --preset release -DSQLITE_TEST_SUITE=all -DSQLITE_TEST_CORES=seq
+        run: cmake --preset release -DCMAKE_CXX_FLAGS=-Wno-invalid-offsetof -DSQLITE_TEST_SUITE=all -DSQLITE_TEST_CORES=seq
       - name: Build
         run: cmake --build --preset release --target x86sim-linux
       - name: Test (seq, full)
@@ -79,7 +79,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Configure
-        run: cmake --preset release -DSQLITE_TEST_SUITE=all -DSQLITE_TEST_CORES=ooo
+        run: cmake --preset release -DCMAKE_CXX_FLAGS=-Wno-invalid-offsetof -DSQLITE_TEST_SUITE=all -DSQLITE_TEST_CORES=ooo
       - name: Build
         run: cmake --build --preset release --target x86sim-linux
       - name: Test (ooo, full)

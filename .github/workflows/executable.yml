@@ -16,6 +16,12 @@ jobs:
     env:
       CC: gcc-14
       CXX: g++-14
+      # Several simulator structs intentionally use C-style layout idioms on
+      # non-standard-layout types, so __builtin_offsetof (offsetof_/baseof) is
+      # only conditionally-supported and GCC warns at every site. Silence that
+      # category for the CI build only; CMake folds CXXFLAGS into the cache on
+      # the first (always fresh here) configure.
+      CXXFLAGS: -Wno-invalid-offsetof
 
     steps:
       - uses: actions/checkout@v5
