@@ -45,10 +45,10 @@ void assist_sysenter(Context& ctx) {
 }
 
 void assist_cpuid(Context& ctx) {
-  W64& rax = ctx.commitarf[REG_rax];
-  W64& rbx = ctx.commitarf[REG_rbx];
-  W64& rcx = ctx.commitarf[REG_rcx];
-  W64& rdx = ctx.commitarf[REG_rdx];
+  word_t& rax = ctx.commitarf[REG_rax];
+  word_t& rbx = ctx.commitarf[REG_rbx];
+  word_t& rcx = ctx.commitarf[REG_rcx];
+  word_t& rdx = ctx.commitarf[REG_rdx];
 
   W32 func = rax;
   W32 subfunc = rcx;
@@ -64,8 +64,8 @@ void assist_cpuid(Context& ctx) {
 }
 
 void assist_rdtsc(Context& ctx) {
-  W64& rax = ctx.commitarf[REG_rax];
-  W64& rdx = ctx.commitarf[REG_rdx];
+  word_t& rax = ctx.commitarf[REG_rax];
+  word_t& rdx = ctx.commitarf[REG_rdx];
   W64 tsc = ctx.machine_impl->sim_cycle;
   rax = LO32(tsc);
   rdx = HI32(tsc);

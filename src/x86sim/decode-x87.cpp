@@ -36,7 +36,7 @@ static double x87_round(double v, int rc) {
 }
 
 void assist_x87_fist(Context& ctx) {
-  W64& tos = ctx.commitarf[REG_fptos];
+  word_t& tos = ctx.commitarf[REG_fptos];
   W64 target_addr = ctx.commitarf[REG_ar1];
   int size = ctx.commitarf[REG_ar2] >> 1;
   W64 pop = ctx.commitarf[REG_ar2] & 0x1;
@@ -66,9 +66,9 @@ void assist_x87_fldcw(Context& ctx) {
 }
 
 void assist_x87_fprem(Context& ctx) {
-  W64& tos = ctx.commitarf[REG_fptos];
-  W64& st0 = ctx.fpstack[tos >> 3];
-  W64& st1 = ctx.fpstack[((tos >> 3) + 1) & 0x7];
+  word_t& tos = ctx.commitarf[REG_fptos];
+  word_t& st0 = ctx.fpstack[tos >> 3];
+  word_t& st1 = ctx.fpstack[((tos >> 3) + 1) & 0x7];
   SSEType st0u(st0);
   SSEType st1u(st1);
 
@@ -87,9 +87,9 @@ void assist_x87_fprem(Context& ctx) {
 
 #define make_two_input_x87_func_with_pop(name, expr)                                                                   \
   void assist_x87_##name(Context& ctx) {                                                                               \
-    W64& tos = ctx.commitarf[REG_fptos];                                                                               \
-    W64& st0 = ctx.fpstack[tos >> 3];                                                                                  \
-    W64& st1 = ctx.fpstack[((tos >> 3) + 1) & 0x7];                                                                    \
+    word_t& tos = ctx.commitarf[REG_fptos];                                                                            \
+    word_t& st0 = ctx.fpstack[tos >> 3];                                                                               \
+    word_t& st1 = ctx.fpstack[((tos >> 3) + 1) & 0x7];                                                                 \
     SSEType st0u(st0);                                                                                                 \
     SSEType st1u(st1);                                                                                                 \
     (expr);                                                                                                            \
@@ -137,9 +137,9 @@ make_two_input_x87_func_with_pop(fyl2xp1, st1u.d = x87_fyl2xp1(st1u.d, st0u.d));
 make_two_input_x87_func_with_pop(fpatan, st1u.d = x87_fpatan(st1u.d, st0u.d));
 
 void assist_x87_fscale(Context& ctx) {
-  W64& tos = ctx.commitarf[REG_fptos];
-  W64& st0 = ctx.fpstack[tos >> 3];
-  W64& st1 = ctx.fpstack[((tos >> 3) + 1) & 0x7];
+  word_t& tos = ctx.commitarf[REG_fptos];
+  word_t& st0 = ctx.fpstack[tos >> 3];
+  word_t& st1 = ctx.fpstack[((tos >> 3) + 1) & 0x7];
   SSEType st0u(st0);
   SSEType st1u(st1);
   st0u.d = st0u.d * std::exp2(std::trunc(st1u.d));
@@ -154,7 +154,7 @@ void assist_x87_fscale(Context& ctx) {
 
 #define make_unary_x87_func(name, expr)                                                                                \
   void assist_x87_##name(Context& ctx) {                                                                               \
-    W64& r = ctx.fpstack[ctx.commitarf[REG_fptos] >> 3];                                                               \
+    word_t& r = ctx.fpstack[ctx.commitarf[REG_fptos] >> 3];                                                            \
     SSEType ra(r);                                                                                                     \
     ra.d = (expr);                                                                                                     \
     r = ra.w64;                                                                                                        \
@@ -170,7 +170,7 @@ make_unary_x87_func(fcos, std::cos(ra.d));
 make_unary_x87_func(f2xm1, std::exp2(ra.d) - 1);
 
 void assist_x87_frndint(Context& ctx) {
-  W64& r = ctx.fpstack[ctx.commitarf[REG_fptos] >> 3];
+  word_t& r = ctx.fpstack[ctx.commitarf[REG_fptos] >> 3];
   SSEType ra(r);
   ra.d = x87_round(ra.d, X87ControlWord(static_cast<W16>(ctx.fpcw)).rc);
   r = ra.w64;
@@ -183,9 +183,9 @@ void assist_x87_frndint(Context& ctx) {
 
 #define make_two_output_x87_func_with_push(name, expr)                                                                 \
   void assist_x87_##name(Context& ctx) {                                                                               \
-    W64& tos = ctx.commitarf[REG_fptos];                                                                               \
-    W64& st0 = ctx.fpstack[tos >> 3];                                                                                  \
-    W64& st1 = ctx.fpstack[((tos >> 3) - 1) & 0x7];                                                                    \
+    word_t& tos = ctx.commitarf[REG_fptos];                                                                            \
+    word_t& st0 = ctx.fpstack[tos >> 3];                                                                               \
+    word_t& st1 = ctx.fpstack[((tos >> 3) - 1) & 0x7];                                                                 \
     SSEType st0u(st0);                                                                                                 \
     SSEType st1u(st1);                                                                                                 \
     expr;                                                                                                              \
@@ -210,9 +210,9 @@ make_two_output_x87_func_with_push(fxtract, (st1u.d = std::scalbn(st0u.d, -std::
                                              st0u.d = double(std::ilogb(st0u.d))));
 
 void assist_x87_fprem1(Context& ctx) {
-  W64& tos = ctx.commitarf[REG_fptos];
-  W64& st0 = ctx.fpstack[tos >> 3];
-  W64& st1 = ctx.fpstack[((tos >> 3) + 1) & 0x7];
+  word_t& tos = ctx.commitarf[REG_fptos];
+  word_t& st0 = ctx.fpstack[tos >> 3];
+  word_t& st1 = ctx.fpstack[((tos >> 3) + 1) & 0x7];
   SSEType st0u(st0);
   SSEType st1u(st1);
 
@@ -230,7 +230,7 @@ void assist_x87_fprem1(Context& ctx) {
 }
 
 void assist_x87_fxam(Context& ctx) {
-  W64& r = ctx.fpstack[ctx.commitarf[REG_fptos] >> 3];
+  word_t& r = ctx.fpstack[ctx.commitarf[REG_fptos] >> 3];
   SSEType ra(r);
 
   X87StatusWord* sw = (X87StatusWord*)&ctx.commitarf[REG_fpsw];
@@ -283,7 +283,7 @@ void assist_x87_fld80(Context& ctx) {
   }
 
   // Push on stack
-  W64& tos = ctx.commitarf[REG_fptos];
+  word_t& tos = ctx.commitarf[REG_fptos];
   tos = (tos - 8) & FP_STACK_MASK;
   ctx.fpstack[tos >> 3] = x87_fp_80bit_to_64bit(&data, X87ControlWord(static_cast<W16>(ctx.fpcw)).rc);
   setbit(ctx.commitarf[REG_fptags], tos);
@@ -292,7 +292,7 @@ void assist_x87_fld80(Context& ctx) {
 
 void assist_x87_fstp80(Context& ctx) {
   // Store and pop from stack
-  W64& tos = ctx.commitarf[REG_fptos];
+  word_t& tos = ctx.commitarf[REG_fptos];
   X87Reg data;
   x87_fp_64bit_to_80bit(&data, ctx.fpstack[tos >> 3]);
 
