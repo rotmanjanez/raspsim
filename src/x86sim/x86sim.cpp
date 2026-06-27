@@ -260,13 +260,23 @@ RunResult Machine::run(CpuState& state, AddressSpace& space, RunOptions options)
   machine_->state = &state;
   machine_->address_space = &space;
 
+  const auto configured_stop_at = machine_->config.stop_at_user_insns;
   const auto stop_at = options.instruction_limit ? machine_->total_user_insns_committed + *options.instruction_limit
-                                                 : std::numeric_limits<W64>::max();
-  machine_->config.stop_at_user_insns = stop_at;
+                                                 : configured_stop_at;
+  if (options.instruction_limit)
+    machine_->config.stop_at_user_insns = stop_at;
+
+  if (machine_->total_user_insns_committed >= stop_at) {
+    if (options.instruction_limit)
+      machine_->config.stop_at_user_insns = configured_stop_at;
+    return {.reason = StopReason::instruction_limit, .stats = stats(), .x86_exception = std::nullopt, .message = {}};
+  }
 
   try {
     machine_->run();
   } catch (const X86Exception& e) {
+    if (options.instruction_limit)
+      machine_->config.stop_at_user_insns = configured_stop_at;
     return {
         .reason = StopReason::x86_exception,
         .stats = stats(),
@@ -274,6 +284,9 @@ RunResult Machine::run(CpuState& state, AddressSpace& space, RunOptions options)
         .message = e.message,
     };
   }
+
+  if (options.instruction_limit)
+    machine_->config.stop_at_user_insns = configured_stop_at;
 
   // A pending stop (guest exit, unsupported syscall, host request) takes
   // precedence over the instruction limit: if the guest exits on the very
@@ -285,7 +298,7 @@ RunResult Machine::run(CpuState& state, AddressSpace& space, RunOptions options)
     return *machine_->pending_stop;
   }
 
-  if (options.instruction_limit && stats().instructions >= stop_at)
+  if (stats().instructions >= stop_at)
     return {.reason = StopReason::instruction_limit, .stats = stats(), .x86_exception = std::nullopt, .message = {}};
 
   return {.reason = StopReason::guest_exit, .stats = stats(), .x86_exception = std::nullopt, .message = {}};

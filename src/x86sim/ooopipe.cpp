@@ -1993,7 +1993,8 @@ int ReorderBufferEntry::commit() {
     return COMMIT_RESULT_BARRIER;
   }
 
-  if unlikely (uop_is_eom & thread.stop_at_next_eom) {
+  if unlikely (uop_is_eom &
+               (thread.stop_at_next_eom || core.machine.total_user_insns_committed >= config.stop_at_user_insns)) {
     logging::println("[vcpu {}] Stopping at cycle {} ({} commits)", thread.ctx.vcpuid, core.machine.sim_cycle,
                      core.machine.total_user_insns_committed);
     return COMMIT_RESULT_STOP;
