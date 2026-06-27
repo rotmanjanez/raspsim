@@ -11,7 +11,6 @@
 #include <cstdint>
 #include <cstring>
 #include <format>
-#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -181,17 +180,14 @@ public:
       return do_read(ctx, space);
     if (n == abi::write)
       return do_write(ctx, space);
+    if (n == kSyscallReadlink || n == kSyscallReadlinkat)
+      return do_readlink(ctx, space);
 
-    // brk/mmap/munmap/mremap: opt-in Linux heap. The handlers self-decode the
-    // syscall number and return std::nullopt for anything they do not handle.
-    if (enable_heap) {
-      if (auto r = sys_brk.try_syscall(machine, pid, ctx, space, kind))
-        return *r;
-      if (auto r = sys_mmap.try_syscall(machine, pid, ctx, space, kind))
-        return *r;
-      if (auto r = sys_munmap.try_syscall(machine, pid, ctx, space, kind))
-        return *r;
-      if (auto r = sys_mremap.try_syscall(machine, pid, ctx, space, kind))
+    // Opt-in portable Linux glibc-startup chain. Every handler self-decodes the
+    // syscall number and returns std::nullopt for anything it does not handle,
+    // so consulting the chain is harmless for unrelated syscalls.
+    if (enable_glibc) {
+      if (auto r = glibc_syscalls.try_syscall(machine, pid, ctx, space, kind))
         return *r;
     }
 
@@ -210,16 +206,34 @@ public:
       std::rethrow_exception(std::exchange(pending_error, nullptr));
   }
 
-  bool enable_heap = false;
+  // Enables the portable Linux glibc-startup chain: the malloc/free heap
+  // (brk + anonymous mmap/munmap/mremap) plus arch_prctl, set_tid_address,
+  // set_robust_list, rseq, prlimit64, uname, futex and the synthetic signal
+  // syscalls. All of these are register/memory-only handlers from the support
+  // library (no host syscalls).
+  bool enable_glibc = false;
   // Guest fd -> Python file-like object. Seeded with 0/1/2 in the ctor; an
   // absent (or None) entry means that fd is unconfigured.
   std::unordered_map<int, py::object> fds;
+  // Optional Python callable resolving a symlink path to its target,
+  // readlink(path: str) -> str | None. glibc reads /proc/self/exe at startup.
+  // None ⇒ readlink/readlinkat return -ENOSYS; a callback returning None ⇒
+  // -ENOENT. Routed through Python (like read/write) rather than the host so the
+  // binding stays free of real filesystem access.
+  py::object readlink_cb = py::none();
 
 private:
   // Cap a single read/write transfer so a bogus guest count cannot trigger a
   // huge allocation; oversized requests become a (legal) short transfer. This
   // mirrors the spirit of the bounds checks in the syscall support library.
   static constexpr word_t kMaxTransfer = word_t{1} << 31; // 2 GiB
+
+  // x86-64 syscall numbers handled directly here (routed to Python), and the
+  // negated Linux errno values returned to the guest on the failure paths.
+  static constexpr word_t kSyscallReadlink = 89;
+  static constexpr word_t kSyscallReadlinkat = 267;
+  static constexpr std::int64_t kLinuxEnoent = 2;
+  static constexpr std::int64_t kLinuxEnosys = 38;
 
   static x86sim::SyscallResult guest_exit() {
     return {.reason = x86sim::StopReason::guest_exit, .continue_execution = false, .message = {}};
@@ -321,25 +335,99 @@ private:
     return abi::return_value(ctx, static_cast<std::int64_t>(total));
   }
 
+  // readlink(path, buf, size) / readlinkat(dirfd, path, buf, size). Resolution
+  // is delegated to the optional Python `readlink_cb` so the binding performs no
+  // real filesystem access; the dirfd of readlinkat is ignored (paths are
+  // resolved by the callback). Unlike read(2), readlink(2) does not append a NUL
+  // and the result is truncated (not an error) when it exceeds the buffer.
+  x86sim::SyscallResult do_readlink(x86sim::CpuState& ctx, x86sim::AddressSpace& space) {
+    namespace abi = x86sim::linux_syscalls::abi;
+    if (readlink_cb.is_none())
+      return abi::return_value(ctx, -kLinuxEnosys);
+
+    const bool is_at = abi::syscall_number(ctx) == kSyscallReadlinkat;
+    const address_t path_addr = abi::syscall_arg(ctx, is_at ? 1 : 0);
+    const address_t buffer = abi::syscall_arg(ctx, is_at ? 2 : 1);
+    const word_t size = std::min<word_t>(abi::syscall_arg(ctx, is_at ? 3 : 2), kMaxTransfer);
+
+    std::string path;
+    if (!read_guest_cstring(space, path_addr, path))
+      return unsupported();
+
+    std::string target;
+    try {
+      py::object result = readlink_cb(path);
+      if (result.is_none())
+        return abi::return_value(ctx, -kLinuxEnoent);
+      target = result.cast<std::string>();
+    } catch (py::error_already_set&) {
+      return py_error_stop();
+    }
+
+    const std::size_t n = std::min<std::size_t>(target.size(), static_cast<std::size_t>(size));
+    if (n > 0) {
+      auto bytes = std::as_bytes(std::span(target.data(), n));
+      if (auto r = space.write(buffer, bytes); !r)
+        return unsupported();
+    }
+    return abi::return_value(ctx, static_cast<std::int64_t>(n));
+  }
+
+  // Read a NUL-terminated guest string into `out` (without the terminator).
+  // Returns false on unreadable memory or a missing terminator within the cap.
+  static bool read_guest_cstring(x86sim::AddressSpace& space, address_t addr, std::string& out) {
+    constexpr std::size_t kMaxPath = 4096;
+    out.clear();
+    for (std::size_t i = 0; i < kMaxPath; ++i) {
+      std::byte byte{};
+      if (auto r = space.read(addr + i, std::span(&byte, 1)); !r)
+        return false;
+      char c = static_cast<char>(byte);
+      if (c == '\0')
+        return true;
+      out.push_back(c);
+    }
+    return false;
+  }
+
   // Per-chunk transfer size for streamed writes; bounds our own buffering.
   static constexpr std::size_t kIoChunk = 64 * 1024;
 
   std::exception_ptr pending_error;
   x86sim::linux_syscalls::ProcessId pid;
-  x86sim::linux_syscalls::SysBrk sys_brk;
-  x86sim::linux_syscalls::SysMmap sys_mmap;
-  x86sim::linux_syscalls::SysMunmap sys_munmap;
-  x86sim::linux_syscalls::SysMremap sys_mremap;
+  // The portable glibc-startup syscalls. Built fresh per PyHost so the heap
+  // handlers' next_mapping_address / break state reset for each Machine. read,
+  // write, exit/exit_group and readlink are handled above (routed to Python), so
+  // they are intentionally absent from this chain. SysGetIdentity is included
+  // (getpid/getuid/...; glibc probes uid/gid at startup when AT_SECURE is
+  // absent); it returns synthetic constants and the pid passed below, and does
+  // not touch the (unused) ProcessTable. No other ProcessTable-backed handlers
+  // (fork/wait/...) are wired in.
+  decltype(x86sim::linux_syscalls::SysBrk{} | x86sim::linux_syscalls::SysMmap{} | x86sim::linux_syscalls::SysMunmap{} |
+           x86sim::linux_syscalls::SysMremap{} | x86sim::linux_syscalls::SysArchPrctl{} |
+           x86sim::linux_syscalls::SysSetTidAddress{} | x86sim::linux_syscalls::SysSetRobustList{} |
+           x86sim::linux_syscalls::SysRseq{} | x86sim::linux_syscalls::SysPrlimit64{} |
+           x86sim::linux_syscalls::SysUname{} | x86sim::linux_syscalls::SysGetIdentity{} |
+           x86sim::linux_syscalls::SysFutex{} | x86sim::linux_syscalls::SysSignals{}) glibc_syscalls =
+      x86sim::linux_syscalls::SysBrk{} | x86sim::linux_syscalls::SysMmap{} | x86sim::linux_syscalls::SysMunmap{} |
+      x86sim::linux_syscalls::SysMremap{} | x86sim::linux_syscalls::SysArchPrctl{} |
+      x86sim::linux_syscalls::SysSetTidAddress{} | x86sim::linux_syscalls::SysSetRobustList{} |
+      x86sim::linux_syscalls::SysRseq{} | x86sim::linux_syscalls::SysPrlimit64{} | x86sim::linux_syscalls::SysUname{} |
+      x86sim::linux_syscalls::SysGetIdentity{} | x86sim::linux_syscalls::SysFutex{} |
+      x86sim::linux_syscalls::SysSignals{};
 };
 
 class PyMachine {
 public:
-  PyMachine(const char* logfile, bool sse, bool x87, bool perfect_cache, bool static_branchpred, bool heap,
-            py::object stdin_obj, py::object stdout_obj, py::object stdout_err) {
-    if (!lock.try_lock())
-      throw py::value_error("Only one instance of Raspsim can be used at a time");
-
-    host.enable_heap = heap;
+  PyMachine(const char* logfile, bool sse, bool x87, bool perfect_cache, bool static_branchpred, bool glibc,
+            py::object stdin_obj, py::object stdout_obj, py::object stdout_err, py::object readlink_cb,
+            const char* core) {
+    host.enable_glibc = glibc;
+    if (!readlink_cb.is_none()) {
+      if (!py::hasattr(readlink_cb, "__call__"))
+        throw py::value_error("readlink must be a callable: readlink(path: str) -> str | None");
+      host.readlink_cb = std::move(readlink_cb);
+    }
     // Map guest fds 0/1/2 to the supplied Python file-like objects (None leaves
     // the fd unconfigured, so the guest sees an unsupported syscall on it).
     map_stream(0, std::move(stdin_obj), "read", "stdin");
@@ -353,10 +441,23 @@ public:
     options.debug.static_branchpred = static_branchpred;
     options.log.log_filename = logfile;
 
+    // Core model selection. The out-of-order core is the default; the sequential
+    // core is slower but executes unaligned loads/stores correctly, which the
+    // out-of-order core's alignment-fixup path currently cannot (it stalls until
+    // the deadlock detector aborts the run). Code that relies on unaligned SSE
+    // accesses -- notably glibc's string routines -- needs core="seq".
+    const std::string_view core_name(core);
+    if (core_name == "seq" || core_name == "sequential")
+      options.core = x86sim::CoreModel::sequential;
+    else if (core_name == "ooo" || core_name == "out_of_order")
+      options.core = x86sim::CoreModel::out_of_order;
+    else
+      throw py::value_error(R"(core must be one of "ooo"/"out_of_order" or "seq"/"sequential")");
+
     machine = std::make_unique<x86sim::Machine>(host, options);
   }
 
-  ~PyMachine() { lock.unlock(); }
+  ~PyMachine() = default;
 
   static constexpr word_t getPageSize() { return x86sim::AddressSpace::kPageSize; }
 
@@ -381,7 +482,6 @@ public:
   x86sim::CpuState cpu_state;
   x86sim::AddressSpace address_space;
   std::unique_ptr<x86sim::Machine> machine;
-  static std::mutex lock;
 
 private:
   // Validate that a supplied stream exposes the attribute the guest will need,
@@ -394,8 +494,6 @@ private:
     host.fds[fd] = std::move(obj);
   }
 };
-
-std::mutex PyMachine::lock;
 
 void AddrRef::write(py::bytes&& bts) {
   std::string mem{std::move(bts)};
@@ -806,13 +904,22 @@ PYBIND11_MODULE(bindings, m) {
       .REGXMM(13);
 
   py::class_<PyMachine>(m, "Machine", "A class to interact with the simulator")
-      .def(py::init<const char*, bool, bool, bool, bool, bool, py::object, py::object, py::object>(),
+      .def(py::init<const char*, bool, bool, bool, bool, bool, py::object, py::object, py::object, py::object,
+                    const char*>(),
            "logfile"_a = "/dev/null", "sse"_a = true, "x87"_a = true, "perfect_cache"_a = false,
-           "static_branchpred"_a = false, "heap"_a = false, "stdin"_a = py::none(), "stdout"_a = py::none(),
-           "stderr"_a = py::none(),
-           "Create a new Machine instance.\n\nSet heap=True to enable the Linux malloc/free heap "
-           "(brk + anonymous mmap/munmap/mremap). Pass file-like objects for stdin/stdout/stderr to "
-           "route guest read/write on fds 0/1/2 to Python (e.g. io.BytesIO); host fds are never used.")
+           "static_branchpred"_a = false, "glibc"_a = false, "stdin"_a = py::none(), "stdout"_a = py::none(),
+           "stderr"_a = py::none(), "readlink"_a = py::none(), "core"_a = "ooo",
+           "Create a new Machine instance.\n\nSet glibc=True to enable the portable Linux "
+           "glibc-startup syscalls: the malloc/free heap (brk + anonymous mmap/munmap/mremap) "
+           "plus arch_prctl, set_tid_address, set_robust_list, rseq, prlimit64, uname, futex and "
+           "the synthetic signal syscalls. Pass file-like objects for stdin/stdout/stderr to route "
+           "guest read/write on fds 0/1/2 to Python (e.g. io.BytesIO); host fds are never used. Pass "
+           "readlink=callable to resolve guest readlink()/readlinkat() calls (path: str -> str | "
+           "None), e.g. for /proc/self/exe; without it readlink returns -ENOSYS.\n\n"
+           "core selects the CPU model: \"ooo\" (default, out-of-order) or \"seq\" (sequential). "
+           "The sequential core is slower but handles unaligned memory accesses correctly; the "
+           "out-of-order core currently cannot, so running glibc (which uses unaligned SSE in its "
+           "string routines) requires core=\"seq\".")
       .def_property_readonly("registers", &PyMachine::getRegisters, "Get the register file")
       .def("run", &PyMachine::run, "Run the simulator for a number of instructions",
            "ninstr"_a = static_cast<unsigned long long>(-1))

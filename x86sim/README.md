@@ -110,19 +110,30 @@ data = address.read(size=4)
 print(f"Data: {data.hex()}")
 ```
 
-### Heap and Stream I/O
+### glibc syscalls and Stream I/O
 
 `Machine` is a register/memory simulator by default: an `int 0x80` stops it and
-every other syscall raises. Two opt-in features extend it, both off by default:
+every other syscall raises. Several opt-in features extend it, all off by
+default:
 
-- `heap=True` enables the Linux malloc/free heap for the guest: the `brk`,
-  `mmap`/`munmap`/`mremap` (anonymous) syscalls are emulated in-process so a
-  guest can grow its heap. With `heap=False` those syscalls raise.
+- `glibc=True` enables the portable Linux glibc-startup syscalls: the malloc/free
+  heap (`brk` and anonymous `mmap`/`munmap`/`mremap`) plus `arch_prctl`,
+  `set_tid_address`, `set_robust_list`, `rseq`, `prlimit64`, `uname`,
+  `getpid`/`getuid`/…, `futex` and the synthetic signal syscalls. With
+  `glibc=False` those syscalls raise.
 - `stdin`/`stdout`/`stderr` route the guest's `read(0, ...)` / `write(1, ...)` /
   `write(2, ...)` to Python file-like objects (anything exposing `.read(n)` /
   `.write(bytes)`, such as `io.BytesIO`). No host file descriptors are ever
   touched — Python fully controls the mapping. An fd left as `None` is
   unconfigured and a guest I/O on it raises.
+- `readlink=callable` resolves the guest's `readlink`/`readlinkat` calls via a
+  Python `readlink(path: str) -> str | None` (e.g. for `/proc/self/exe`, which
+  glibc reads at startup). Returning `None` yields `-ENOENT`; without a callback
+  the syscall returns `-ENOSYS`. No real filesystem is touched.
+- `core="seq"` selects the sequential CPU model instead of the default
+  out-of-order one (`core="ooo"`). It is slower but handles unaligned memory
+  accesses correctly; the out-of-order core does not, so running glibc — whose
+  string routines use unaligned SSE — requires `core="seq"`.
 
 These features require the guest to use the 64-bit `syscall` instruction (the
 Linux syscall ABI: number in `rax`, arguments in `rdi`, `rsi`, `rdx`, ...).
@@ -153,14 +164,31 @@ sim.run()
 # the guest buffer now contains b"hello"
 ```
 
-#### Enabling malloc/free (heap)
+#### Enabling the glibc-startup syscalls
 
 ```python
 from x86sim import Machine
 
-sim = Machine(heap=True)
+sim = Machine(glibc=True)
 # ... load a guest that calls brk / anonymous mmap (e.g. via malloc) ...
-sim.run()  # heap syscalls succeed; with Machine() (heap=False) they would raise
+sim.run()  # glibc syscalls succeed; with Machine() (glibc=False) they would raise
+```
+
+#### Running a real glibc binary
+
+A static, non-PIE glibc executable can run end to end once you build its initial
+stack (argc/argv/envp and the auxiliary vector — see
+`tests/python/elfload.py` for a reference loader) and select the sequential core:
+
+```python
+import io
+from x86sim import Machine
+
+out = io.BytesIO()
+sim = Machine(glibc=True, core="seq", stdout=out, readlink=lambda p: "/hello")
+# ... map the ELF's PT_LOAD segments and lay out the argc/argv/envp/auxv stack ...
+sim.run()  # __libc_start_main -> main -> write(1, ...) -> exit_group
+print(out.getvalue())
 ```
 
 ### Working with Registers
