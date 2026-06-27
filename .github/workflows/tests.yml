@@ -21,7 +21,7 @@ jobs:
     name: clang-format
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Check formatting
         run: tools/clang-format.sh check
 
@@ -34,7 +34,7 @@ jobs:
     needs: format
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Configure
         run: cmake --preset release -DSQLITE_TEST_SUITE=extraquick -DSQLITE_TEST_CORES=seq
       - name: Build
@@ -47,7 +47,7 @@ jobs:
     needs: format
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Configure
         run: cmake --preset release -DSQLITE_TEST_SUITE=extraquick -DSQLITE_TEST_CORES=ooo
       - name: Build
@@ -64,7 +64,7 @@ jobs:
     needs: [quick-seq, quick-ooo]
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Configure
         run: cmake --preset release -DSQLITE_TEST_SUITE=all -DSQLITE_TEST_CORES=seq
       - name: Build
@@ -77,7 +77,7 @@ jobs:
     needs: [quick-seq, quick-ooo]
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Configure
         run: cmake --preset release -DSQLITE_TEST_SUITE=all -DSQLITE_TEST_CORES=ooo
       - name: Build
