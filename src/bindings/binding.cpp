@@ -917,9 +917,9 @@ PYBIND11_MODULE(bindings, m) {
   py::class_<PyMachine>(m, "Machine", "A class to interact with the simulator")
       .def(py::init<const char*, bool, bool, bool, bool, bool, py::object, py::object, py::object, py::object,
                     const char*>(),
-           "logfile"_a = "/dev/null", "sse"_a = true, "x87"_a = true, "perfect_cache"_a = false,
-           "static_branchpred"_a = false, "glibc"_a = false, "stdin"_a = py::none(), "stdout"_a = py::none(),
-           "stderr"_a = py::none(), "readlink"_a = py::none(), "core"_a = "ooo",
+           "logfile"_a = "", "sse"_a = true, "x87"_a = true, "perfect_cache"_a = false, "static_branchpred"_a = false,
+           "glibc"_a = false, "stdin"_a = py::none(), "stdout"_a = py::none(), "stderr"_a = py::none(),
+           "readlink"_a = py::none(), "core"_a = "ooo",
            "Create a new Machine instance.\n\nSet glibc=True to enable the portable Linux "
            "glibc-startup syscalls: the malloc/free heap (brk + anonymous mmap/munmap/mremap) "
            "plus arch_prctl, set_tid_address, set_robust_list, rseq, prlimit64, uname, futex and "

@@ -159,7 +159,10 @@ private:
   }
 
 public:
-  Logger() : sink_(std::make_unique<FileLogSink>(stderr)), current_level_(static_cast<int>(INFO)), enabled_(false) {}
+  // No sink by default: a freshly constructed logger produces no output at all
+  // until its owner installs one (e.g. via set_file_sink). This is the "off"
+  // state -- callers must opt in to logging by configuring a destination.
+  Logger() : sink_(nullptr), current_level_(static_cast<int>(INFO)), enabled_(false) {}
 
   // Owns a unique_ptr sink; not copyable. Constructed in place by its owner.
   Logger(const Logger&) = delete;
@@ -190,8 +193,11 @@ public:
   // Explicit flush
   void flush() { flush_sink(); }
 
-  // Fast inline level check - NO virtual call on hot path
-  bool logable_at(Level level) const { return enabled_ && (static_cast<int>(level) >= current_level_); }
+  // Fast inline level check - NO virtual call on hot path. Requiring a sink here
+  // means a logger with no destination skips formatting entirely (not just the
+  // write), so the default "off" state never pays the cost of building the
+  // multi-million-line instruction trace.
+  bool logable_at(Level level) const { return enabled_ && sink_ && (static_cast<int>(level) >= current_level_); }
 
   // Format and emit a message without a trailing newline.
   template<typename... Args>

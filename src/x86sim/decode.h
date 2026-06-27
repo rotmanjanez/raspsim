@@ -630,7 +630,11 @@ private:
   BasicBlockPageCache pages_;
 };
 
-extern FILE* bbcache_dump_file;
+// Process-global: a single optional basic-block dump file shared by every
+// Machine (the -bbdump debug feature). Atomic so the decoder's hot-path read
+// and the construction-time open/close in handle_config_change never form a
+// data race; see decode-core.cpp for the access protocol.
+extern std::atomic<FILE*> bbcache_dump_file;
 
 static const char* decode_type_names[DECODE_TYPE_COUNT] = {"fast", "complex", "x87", "sse", "assist"};
 

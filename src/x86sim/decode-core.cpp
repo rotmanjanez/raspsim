@@ -26,7 +26,7 @@
 
 namespace x86sim {
 
-FILE* bbcache_dump_file = nullptr;
+std::atomic<FILE*> bbcache_dump_file = nullptr;
 
 //
 // Calling convention:
@@ -1512,9 +1512,9 @@ bool BasicBlockCache::invalidate(BasicBlock* bb, int reason) {
     return false;
   }
 
-  if unlikely (bbcache_dump_file) {
-    if (std::fwrite(static_cast<BasicBlockBase*>(bb), sizeof(BasicBlockBase), 1, bbcache_dump_file) != 1 ||
-        std::fwrite(bb->transops, sizeof(TransOp), bb->count, bbcache_dump_file) != (size_t)bb->count) {
+  if (FILE* dump = bbcache_dump_file.load(std::memory_order_acquire); unlikely(dump)) {
+    if (std::fwrite(static_cast<BasicBlockBase*>(bb), sizeof(BasicBlockBase), 1, dump) != 1 ||
+        std::fwrite(bb->transops, sizeof(TransOp), bb->count, dump) != (size_t)bb->count) {
       machine->logger.println(logging::WARNING, "Failed to write basic block {} to bb dump file", (void*)bb);
     }
   }
@@ -2367,9 +2367,10 @@ auto std::formatter<x86sim::BasicBlockCache>::format(x86sim::BasicBlockCache& bb
 namespace x86sim {
 
 void shutdown_decode() {
-  if (bbcache_dump_file) {
-    std::fclose(bbcache_dump_file);
-    bbcache_dump_file = nullptr;
+  // Atomically take ownership of the file so a concurrent reconfigure/shutdown
+  // closes it exactly once (whichever exchange observes the non-null pointer).
+  if (FILE* dump = bbcache_dump_file.exchange(nullptr, std::memory_order_acq_rel)) {
+    std::fclose(dump);
   }
 }
 

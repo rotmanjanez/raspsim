@@ -9,6 +9,7 @@
 #include <format>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <fcntl.h>
 #include <utility>
@@ -49,7 +50,6 @@ Context::Context(const Options& config, MachineImpl& core, int vcpuid_) : Contex
 #ifndef CONFIG_ONLY
 
 
-std::string current_log_filename;
 std::string current_bbcache_dump_filename;
 
 void backup_and_reopen_logfile(logging::Logger& logger, const Options& options) {
@@ -80,11 +80,15 @@ void force_logging_enabled(logging::Logger& logger, Options& options) {
 bool handle_config_change(logging::Logger& logger, Options& options, int argc, char** argv) {
   static bool first_time = true;
 
-  std::string log_filename = options.log.log_filename.string();
-  if (!options.log.log_filename.empty() && (log_filename != current_log_filename)) {
-    // Can also use "-logfile /dev/fd/1" to send to stdout (or /dev/fd/2 for stderr):
+  // Each Machine owns its logger, so configure this logger's sink directly from
+  // its own options. There is deliberately no process-global "file already
+  // opened" cache here: that leftover from the single-global-logger design made
+  // every machine after the first skip sink setup and fall back to its default
+  // (silent) state, while a stale machine's file stayed bound. An empty filename
+  // means "no log output at all", which leaves the logger sink-less and silent.
+  // Can also use "-logfile /dev/fd/1" to send to stdout (or /dev/fd/2 for stderr).
+  if (!options.log.log_filename.empty()) {
     backup_and_reopen_logfile(logger, options);
-    current_log_filename = log_filename;
   }
 
   // Set log level in the new logging system
@@ -115,16 +119,27 @@ bool handle_config_change(logging::Logger& logger, Options& options, int argc, c
 
   logger.set_enabled(true);
 
-  if (!options.debug.bbcache_dump_filename.empty() &&
-      (options.debug.bbcache_dump_filename != current_bbcache_dump_filename)) {
-    // Can also use "-logfile /dev/fd/1" to send to stdout (or /dev/fd/2 for stderr):
-    if (bbcache_dump_file)
-      std::fclose(bbcache_dump_file);
-    bbcache_dump_file = std::fopen(options.debug.bbcache_dump_filename.c_str(), "wb");
-    if (!bbcache_dump_file) {
-      logger.println(logging::WARNING, "Cannot open bb dump file '{}'", options.debug.bbcache_dump_filename);
+  // Unlike the logger, the bb dump file is a single process-global resource
+  // shared by every Machine, and current_bbcache_dump_filename caches which file
+  // is open so a second machine with the same -bbdump path reuses it instead of
+  // truncating it. The std::string cache cannot be atomic, so the compound
+  // compare/open/swap is serialized under a mutex; the FILE* itself is
+  // std::atomic, keeping the decoder's lock-free hot-path read race-free against
+  // this construction-time reconfigure.
+  {
+    static std::mutex bbcache_mutex;
+    const std::scoped_lock lock(bbcache_mutex);
+    if (!options.debug.bbcache_dump_filename.empty() &&
+        (options.debug.bbcache_dump_filename != current_bbcache_dump_filename)) {
+      FILE* dump = std::fopen(options.debug.bbcache_dump_filename.c_str(), "wb");
+      if (!dump) {
+        logger.println(logging::WARNING, "Cannot open bb dump file '{}'", options.debug.bbcache_dump_filename);
+      }
+      if (FILE* old = bbcache_dump_file.exchange(dump, std::memory_order_acq_rel)) {
+        std::fclose(old);
+      }
+      current_bbcache_dump_filename = options.debug.bbcache_dump_filename;
     }
-    current_bbcache_dump_filename = options.debug.bbcache_dump_filename;
   }
 
   options.log.start_log_at_rip = signext64(options.log.start_log_at_rip, 48);
