@@ -48,7 +48,7 @@ jobs:
           # x86sim needs C++26 (std::expected). The default manylinux compiler
           # is too old, so install a recent GCC toolset and point the build at
           # it. Bump the toolset version if cxx_std_26 is rejected.
-          CIBW_BUILD: "cp39-* cp310-* cp311-* cp312-* cp313-*"
+          CIBW_BUILD: "cp310-* cp311-* cp312-* cp313-*"
           CIBW_SKIP: "*-musllinux*"
           CIBW_ARCHS_LINUX: "x86_64"
           CIBW_MANYLINUX_X86_64_IMAGE: "manylinux_2_28"
