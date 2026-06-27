@@ -6,6 +6,10 @@
 //
 
 #include "decode.h"
+#include "globals.h"
+#include "ptlhwdef.h"
+#include "typedefs.h"
+#include <cassert>
 
 namespace x86sim {
 

@@ -23,7 +23,6 @@
 
 #include <format>
 #include <math.h>
-#include <float.h>
 
 namespace x86sim {
 
@@ -375,11 +374,9 @@ static inline T foldbits(T a) {
 asmlinkage{
 #include <unistd.h>
 #include <sys/types.h>
-#include <ctype.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#include <errno.h>
 };
 
 #include <stdarg.h>
@@ -589,8 +586,6 @@ inline int add_index_modulo(int index, int increment, int bufsize) {
 }
 
 } // namespace x86sim
-
-#include "superstl.h"
 
 
 template<>

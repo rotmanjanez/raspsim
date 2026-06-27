@@ -5,9 +5,15 @@
 // Copyright 1999-2008 Matt T. Yourst <yourst@yourst.com>
 //
 
+#include "ptlhwdef.h"
+#include <cassert>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <format>
-#include "ptlsim.h"
-#include "dcache.h"
+#include "globals.h"
+#include <string>
+#include "typedefs.h"
 
 namespace x86sim {
 

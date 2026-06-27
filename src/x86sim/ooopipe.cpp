@@ -7,12 +7,20 @@
 // Copyright 2006-2008 Hui Zeng <hzeng@cs.binghamton.edu>
 //
 
+#include "decode.h"
 #include "globals.h"
+#include "ptlhwdef.h"
 #include "ptlsim.h"
 #include "branchpred.h"
 #include "logic.h"
 #include "dcache.h"
+#include "typedefs.h"
 #include "x86sim/addrspace.hpp"
+#include "x86sim/logging.hpp"
+#include <algorithm>
+#include <cassert>
+#include <cmath>
+#include <cstdio>
 
 #define INSIDE_OOOCORE
 #include "ooocore.h"

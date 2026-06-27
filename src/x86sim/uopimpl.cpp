@@ -6,12 +6,19 @@
 //
 
 #include "globals.h"
+#include "ptlhwdef.h"
 #include "ptlsim.h"
+#include "typedefs.h"
 #include "x86sim/logging.hpp"
 
 #include <algorithm>
 #include <array>
+#include <bit>
+#include <cassert>
+#include <cmath>
 #include <functional>
+#include <limits>
+#include <type_traits>
 
 
 namespace x86sim {

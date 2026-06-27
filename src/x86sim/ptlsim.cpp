@@ -5,14 +5,21 @@
 // Copyright 2000-2008 Matt T. Yourst <yourst@yourst.com>
 //
 
+#include <cstdio>
+#include <format>
+#include <limits>
+#include <memory>
 #include <string>
-#include <unordered_map>
 #include <fcntl.h>
+#include <utility>
 #include "globals.h"
 #include "ptlsim.h"
 #include "decode.h"
+#include "ptlhwdef.h"
+#include "typedefs.h"
 #include "x86sim/logging.hpp"
 #include "stats.h"
+#include "x86sim/x86sim.hpp"
 
 namespace x86sim {
 

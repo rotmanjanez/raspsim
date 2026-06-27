@@ -6,7 +6,15 @@
 //
 
 #include "decode.h"
+#include "globals.h"
+#include "ptlhwdef.h"
+#include "ptlsim-api.h"
+#include "typedefs.h"
 #include "x86sim/logging.hpp"
+#include "x86sim/x86sim.hpp"
+#include <cassert>
+#include <cstdint>
+#include <format>
 
 namespace x86sim {
 

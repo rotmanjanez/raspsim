@@ -5,9 +5,18 @@
 // Copyright 2000-2008 Matt T. Yourst <yourst@yourst.com>
 //
 
-#include "ptlsim.h"
+#include "globals.h"
 #include "config.h"
+#include "typedefs.h"
 #include "x86sim/logging.hpp"
+#include "x86sim/x86sim.hpp"
+#include <algorithm>
+#include <cassert>
+#include <cstdlib>
+#include <cstring>
+#include <format>
+#include <string>
+#include <string_view>
 
 namespace logging = x86sim::logging;
 

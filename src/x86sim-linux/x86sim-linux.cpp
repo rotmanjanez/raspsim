@@ -1,13 +1,14 @@
 #include "x86sim-support/syscall-linux.hpp"
+#include "x86sim/addrspace.hpp"
+#include "x86sim/registerfile.hpp"
 #include "x86sim/x86sim.hpp"
 
-#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <expected>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -16,6 +17,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 namespace {

@@ -8,11 +8,18 @@
 //
 
 #include "globals.h"
+#include "ptlhwdef.h"
+#include "ptlsim-api.h"
 #include "ptlsim.h"
 #include "branchpred.h"
+#include "typedefs.h"
 #include "x86sim/logging.hpp"
 #include "logic.h"
 #include "dcache.h"
+#include <algorithm>
+#include <bitset>
+#include <cassert>
+#include <cmath>
 
 #define INSIDE_OOOCORE
 #include "ooocore.h"

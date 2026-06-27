@@ -11,6 +11,7 @@
 #define _OOOCORE_H_
 
 #include "ptlsim.h"
+#include "ptlsim-api.h"
 
 #include <bitset>
 #include <format>

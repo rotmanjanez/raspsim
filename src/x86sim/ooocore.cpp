@@ -7,19 +7,29 @@
 // Copyright 2006-2008 Hui Zeng <hzeng@cs.binghamton.edu>
 //
 
+#include <_string.h>
+#include <cassert>
+#include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <format>
-#include <print>
-#include <cstdio>
-#include <algorithm>
-#include <stdexcept>
+#include <limits>
+#include <memory>
+#include <string>
+#include <string_view>
 #include <utility>
+#include "decode.h"
 #include "globals.h"
+#include "ptlhwdef.h"
+#include "ptlsim-api.h"
 #include "ptlsim.h"
 #include "branchpred.h"
 #include "logic.h"
 #include "dcache.h"
+#include "superstl.h"
+#include "typedefs.h"
 #include "x86sim/logging.hpp"
+#include "x86sim/x86sim.hpp"
 
 #define INSIDE_OOOCORE
 #define DECLARE_STRUCTURES

@@ -9,8 +9,16 @@
 //
 
 #include "branchpred.h"
+#include "globals.h"
+#include "logic.h"
 #include "stats.h"
+#include "typedefs.h"
 #include "x86sim/logging.hpp"
+#include <algorithm>
+#include <array>
+#include <cassert>
+#include <cmath>
+#include <format>
 
 namespace x86sim {
 

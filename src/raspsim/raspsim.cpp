@@ -5,10 +5,11 @@
 // Copyright 2020-2020 Alexis Engelke <engelke@in.tum.de>
 //
 #include "x86sim-support/cpuid.hpp"
+#include "x86sim/addrspace.hpp"
+#include "x86sim/registerfile.hpp"
 #include "x86sim/x86sim.hpp"
 #include "x86sim/logging.hpp"
 
-#include "ptlsim.h"
 #include "config.h"
 
 #include <cerrno>
@@ -20,6 +21,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 

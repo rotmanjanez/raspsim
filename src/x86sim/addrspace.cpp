@@ -1,12 +1,20 @@
 #include "x86sim/addrspace.hpp"
 
-#include "globals.h"
 #include "x86sim/logging.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
+#include <expected>
+#include <limits>
+#include <memory>
 #include <new>
+#include <optional>
+#include <span>
+#include <utility>
 
 namespace x86sim {
 namespace {

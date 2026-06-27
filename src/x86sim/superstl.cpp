@@ -8,6 +8,7 @@
 //
 
 #include "globals.h"
+#include "typedefs.h"
 #include "superstl.h"
 
 namespace x86sim {

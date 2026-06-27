@@ -6,7 +6,9 @@
 //
 
 #include "decode.h"
-#include "x86sim/logging.hpp"
+#include "globals.h"
+#include "ptlhwdef.h"
+#include "typedefs.h"
 
 #include <cmath>
 #include <numbers>

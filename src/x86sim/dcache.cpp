@@ -6,8 +6,16 @@
 //
 
 #include "dcache.h"
+#include "globals.h"
+#include "ptlhwdef.h"
+#include "ptlsim-api.h"
 #include "stats.h"
+#include "typedefs.h"
 #include "x86sim/logging.hpp"
+#include <bitset>
+#include <cassert>
+#include <format>
+#include <utility>
 
 namespace x86sim {
 

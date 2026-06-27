@@ -1,21 +1,25 @@
 #include "x86sim/x86sim.hpp"
 
+#include "globals.h"
+#include "typedefs.h"
 #include "x86sim/addrspace.hpp"
 #include "ooocore.h"
 #include "ptlhwdef.h"
 #include "ptlsim.h"
 #include "ptlsim-api.h"
 #include "seqcore.h"
-#include "stats.h"
 #include "x86sim/logging.hpp"
+#include "x86sim/registerfile.hpp"
 
 #include <algorithm>
 #include <cassert>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <format>
 #include <limits>
-#include <new>
+#include <memory>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 

@@ -5,18 +5,27 @@
 // Copyright 2003-2008 Matt T. Yourst <yourst@yourst.com>
 //
 
+#include <cassert>
+#include <cmath>
+#include <cstddef>
 #include <cstdlib>
-#include <algorithm>
-#include <stdexcept>
+#include <format>
+#include <limits>
+#include <memory>
+#include <string>
+#include <string_view>
 #include <utility>
 
+#include "decode.h"
 #include "globals.h"
+#include "ptlsim-api.h"
 #include "ptlsim.h"
 #include "seqcore.h"
 #include "branchpred.h"
-#include "dcache.h"
 #include "stats.h"
 #include "ptlhwdef.h"
+#include "superstl.h"
+#include "typedefs.h"
 #include "x86sim/addrspace.hpp"
 #include "x86sim/logging.hpp"
 

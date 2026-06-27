@@ -11,17 +11,12 @@
 
 #include <cstddef>
 #include <format>
-#include <limits>
 #include <memory>
-#include <string>
 #include <string_view>
-#include <utility>
 
 #include "globals.h"
-#include "ptlsim-api.h"
 #include "ptlhwdef.h"
 #include "x86sim/x86sim.hpp"
-#include "x86sim/logging.hpp"
 
 namespace x86sim {
 

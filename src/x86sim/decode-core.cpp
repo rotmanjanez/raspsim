@@ -5,13 +5,23 @@
 // Copyright 1999-2008 Matt T. Yourst <yourst@yourst.com>
 //
 
-#include <sstream>
+#include <algorithm>
+#include <cassert>
+#include <cstddef>
+#include <cstdio>
+#include <cstring>
+#include <format>
+#include <limits>
+#include <string>
 #include "globals.h"
+#include "ptlhwdef.h"
 #include "ptlsim.h"
 #include "decode.h"
 #include "stats.h"
+#include "typedefs.h"
 #include "x86sim/addrspace.hpp"
 #include "x86sim/logging.hpp"
+#include "x86sim/x86sim.hpp"
 
 
 namespace x86sim {
