@@ -39,6 +39,10 @@ target_sources(x86sim
 target_include_directories(x86sim PRIVATE src/x86sim)
 target_compile_definitions(x86sim PRIVATE ${build_info})
 target_compile_features(x86sim PUBLIC cxx_std_26)
+# The Python module links this static archive into a shared object, so it must
+# be position-independent. Scoped to the wheel build to keep the executables
+# non-PIC.
+set_target_properties(x86sim PROPERTIES POSITION_INDEPENDENT_CODE ${X86SIM_BUILD_PYTHON})
 list(APPEND install_targets x86sim)
 
 # --- x86sim_defaults: Linux syscall + cpuid support library ---------------
@@ -59,6 +63,7 @@ if(X86SIM_BUILD_DEFAULTS)
   )
   target_link_libraries(x86sim_defaults PUBLIC x86sim::x86sim)
   target_include_directories(x86sim_defaults PRIVATE src/x86sim)
+  set_target_properties(x86sim_defaults PROPERTIES POSITION_INDEPENDENT_CODE ${X86SIM_BUILD_PYTHON})
   list(APPEND install_targets x86sim_defaults)
 endif()
 
