@@ -16,6 +16,12 @@
 #include <cstddef>
 #include <limits>
 #include <type_traits>
+#include <unistd.h>
+#include <sys/types.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <stdarg.h>
 
 #include "typedefs.h"
 
@@ -369,17 +375,6 @@ static inline T foldbits(T a) {
 
   return lowbits(z, N);
 }
-
-
-asmlinkage{
-#include <unistd.h>
-#include <sys/types.h>
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-};
-
-#include <stdarg.h>
 
 // Simulated guest pages are always 4 KB (x86):
 #define PAGE_SIZE 4096
