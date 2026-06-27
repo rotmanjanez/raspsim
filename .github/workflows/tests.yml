@@ -2,9 +2,9 @@ name: Tests
 
 on:
   push:
-    branches: [ "master" ]
+    branches: [ "main" ]
   pull_request:
-    branches: [ "master" ]
+    branches: [ "main" ]
 
 # These runs are long. Cancel superseded runs on the same ref so the
 # self-hosted runners are not tied up by stale commits.
