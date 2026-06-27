@@ -60,7 +60,7 @@ jobs:
             PATH=/opt/rh/gcc-toolset-14/root/usr/bin:/opt/rh/gcc-toolset-13/root/usr/bin:$PATH
             CXXFLAGS=-Wno-invalid-offsetof
           CIBW_TEST_REQUIRES: "pyelftools"
-          CIBW_TEST_COMMAND: "python -c \"import x86sim; x86sim.Core()\""
+          CIBW_TEST_COMMAND: "python -c \"import x86sim; x86sim.Machine()\""
 
       - uses: actions/upload-artifact@v7
         with:
