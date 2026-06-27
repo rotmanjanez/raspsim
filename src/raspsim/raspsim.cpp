@@ -294,9 +294,8 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  logging::println("\n=== Switching to simulation mode at rip {} ===\n", registers[x86sim::Register::rip]);
-  logging::flush();
-  logging::println("Baseline state:\n{}", registers);
+  logging::eprintln("\n=== Switching to simulation mode at rip {} ===\n", registers[x86sim::Register::rip]);
+  logging::eprintln("Baseline state:\n{}", registers);
 
   x86sim::RunResult result = machine.run(initial_state, address_space);
   x86sim::RegisterFile& final_registers = initial_state;

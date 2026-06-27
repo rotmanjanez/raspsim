@@ -70,7 +70,8 @@ void LoadFillReqQueue<size>::restart() {
   while (!freemap.all()) {
     int idx = lsb(~freemap);
     LoadFillReq& req = reqs[idx];
-    logging::println(logging::DEBUG, "iter {}: force final wakeup/reset of LFRQ slot {}", machine.iterations, idx);
+    machine.logger.println(logging::DEBUG, "iter {}: force final wakeup/reset of LFRQ slot {}", machine.iterations,
+                           idx);
     annul(idx);
   }
   reset();
@@ -82,7 +83,7 @@ void LoadFillReqQueue<size>::reset(int threadid) {
   foreach (i, SIZE) {
     LoadFillReq& req = reqs[i];
     if likely ((!freemap[i]) && (req.lsi.threadid == threadid)) {
-      logging::println(logging::DEBUG, "[vcpu {}] reset lfrq slot {}", threadid, i);
+      machine.logger.println(logging::DEBUG, "[vcpu {}] reset lfrq slot {}", threadid, i);
       waiting[i] = 0;
       ready[i] = 0;
       freemap[i] = 1;
@@ -97,7 +98,7 @@ void LoadFillReqQueue<size>::reset(int threadid) {
 template<int size>
 void LoadFillReqQueue<size>::annul(int lfrqslot) {
   LoadFillReq& req = reqs[lfrqslot];
-  logging::println(logging::TRACE, "  Annul LFRQ slot {}", lfrqslot);
+  machine.logger.println(logging::TRACE, "  Annul LFRQ slot {}", lfrqslot);
   stats.dcache.lfrq.annuls++;
   hierarchy->missbuf.annul_lfrq(lfrqslot);
   reqs[lfrqslot].mbidx = -1;
@@ -121,10 +122,10 @@ int LoadFillReqQueue<size>::add(const LoadFillReq& req) {
       continue;
     const LoadFillReq& old = reqs[i];
     if ((old.lsi.threadid == req.lsi.threadid) && (old.lsi.rob == req.lsi.rob)) {
-      logging::println(logging::ERROR, "ERROR: during add LFRQ req {}, entry {} ({}) already matches at cycle {}", req,
-                       i, old, machine.sim_cycle);
-      logging::println(logging::ERROR, "{}", *this);
-      logging::println(logging::ERROR, "{}", hierarchy->missbuf);
+      machine.logger.println(logging::ERROR, "ERROR: during add LFRQ req {}, entry {} ({}) already matches at cycle {}",
+                             req, i, old, machine.sim_cycle);
+      machine.logger.println(logging::ERROR, "{}", *this);
+      machine.logger.println(logging::ERROR, "{}", hierarchy->missbuf);
       // assert(false);
     }
   }
@@ -147,7 +148,7 @@ int LoadFillReqQueue<size>::add(const LoadFillReq& req) {
 //
 template<int size>
 void LoadFillReqQueue<size>::wakeup(W64 address, const std::bitset<LFRQ_SIZE>& lfrqmask) {
-  logging::println(logging::DEBUG, "LFRQ.wakeup({})", (void*)(Waddr)address);
+  machine.logger.println(logging::DEBUG, "LFRQ.wakeup({})", (void*)(Waddr)address);
   //assert(L2.probe(address));
   waiting &= ~lfrqmask;
   ready |= lfrqmask;
@@ -180,13 +181,13 @@ void LoadFillReqQueue<size>::clock() {
     int idx = lsb(ready);
     LoadFillReq& req = reqs[idx];
 
-    logging::println(logging::DEBUG, "[vcpu {}] at cycle {}: wakeup LFRQ slot {}", req.lsi.threadid, machine.sim_cycle,
-                     idx);
+    machine.logger.println(logging::DEBUG, "[vcpu {}] at cycle {}: wakeup LFRQ slot {}", req.lsi.threadid,
+                           machine.sim_cycle, idx);
 
     W64 delta = LO32(machine.sim_cycle) - LO32(req.initcycle);
     if unlikely (delta >= 65536) {
       // avoid overflow induced erroneous values:
-      logging::println(
+      machine.logger.println(
           logging::WARNING,
           "LFRQ: warning: cycle counter wraparound in initcycle latency (current {} vs init {} = delta {})",
           machine.sim_cycle, req.initcycle, delta);
@@ -256,7 +257,7 @@ void MissBuffer<SIZE>::reset(int threadid) {
     // NOTE SD: This check is broken. A MBE may be shared by LFRQs from different threads.
 #if (0)
     if likely (mb.threadid == threadid) {
-      logging::println(logging::DEBUG, "[vcpu {}] reset missbuf slot {}: for rob{}", threadid, i, mb.rob);
+      machine.logger.println(logging::DEBUG, "[vcpu {}] reset missbuf slot {}: for rob{}", threadid, i, mb.rob);
       assert(!freemap[i]);
       mb.reset();
       freemap[i] = 1;
@@ -272,9 +273,9 @@ void MissBuffer<SIZE>::reset(int threadid) {
       if (*mb.lfrqmap) {
         std::bitset<LFRQ_SIZE> tmp_lfrqmap = mb.lfrqmap ^ hierarchy->lfrq.waiting;
         if (*tmp_lfrqmap) {
-          logging::println(logging::DEBUG, "Multithread share same missbufs[{}] : lfrqmap conflict detected", i);
+          machine.logger.println(logging::DEBUG, "Multithread share same missbufs[{}] : lfrqmap conflict detected", i);
           mb.lfrqmap &= ~tmp_lfrqmap;
-          logging::println(logging::DEBUG, "after remove stale lfrq entries for missbuf[{}]", i);
+          machine.logger.println(logging::DEBUG, "after remove stale lfrq entries for missbuf[{}]", i);
         }
         // NB SD: This is the same as mb.lfrqmap &= hierarchy->lfrq.waiting; which actually makes sense :)
       }
@@ -283,7 +284,7 @@ void MissBuffer<SIZE>::reset(int threadid) {
     if (freemap[i])
       continue;
 
-    logging::println(logging::DEBUG, "Adjusting LFR wakeups for missbuf[{}] : before", i);
+    machine.logger.println(logging::DEBUG, "Adjusting LFR wakeups for missbuf[{}] : before", i);
     if (mb.lfrqmap.any())
       for (size_t l = 0; l < mb.lfrqmap.size(); ++l) {
         if (!mb.lfrqmap[l])
@@ -296,11 +297,11 @@ void MissBuffer<SIZE>::reset(int threadid) {
         if (lfr.lsi.threadid == threadid)
           mb.lfrqmap[l] = 0;
       }
-    logging::println(logging::DEBUG, "Adjusting LFR wakeups for missbuf[{}] : after", i);
+    machine.logger.println(logging::DEBUG, "Adjusting LFR wakeups for missbuf[{}] : after", i);
 
     if likely (mb.lfrqmap.none() && (mb.threadid == threadid)) {
       // Drop empty MBEs that had only wakeups for the flushed thread
-      logging::println(logging::DEBUG, "[vcpu {}] reset missbuf slot {}: for rob{}", threadid, i, mb.rob);
+      machine.logger.println(logging::DEBUG, "[vcpu {}] reset missbuf slot {}: for rob{}", threadid, i, mb.rob);
       assert(!freemap[i]);
       mb.reset();
       freemap[i] = 1;
@@ -351,14 +352,14 @@ int MissBuffer<SIZE>::initiate_miss(W64 addr, bool hit_in_L2, bool icache, int r
     mb.dcache |= (!icache);
     // Handle case where icache miss is already in progress but some
     // data needed in dcache is also stored in that line:
-    logging::println(logging::DEBUG, "[vcpu {}] miss buffer hit for address {}: returning old slot {}", threadid,
-                     (void*)(Waddr)addr, idx);
+    machine.logger.println(logging::DEBUG, "[vcpu {}] miss buffer hit for address {}: returning old slot {}", threadid,
+                           (void*)(Waddr)addr, idx);
     return idx;
   }
 
   if unlikely (full()) {
-    logging::println(logging::DEBUG, "[vcpu {}] miss buffer full while allocating slot for address {}", threadid,
-                     (void*)(Waddr)addr);
+    machine.logger.println(logging::DEBUG, "[vcpu {}] miss buffer full while allocating slot for address {}", threadid,
+                           (void*)(Waddr)addr);
     return -1;
   }
 
@@ -376,12 +377,12 @@ int MissBuffer<SIZE>::initiate_miss(W64 addr, bool hit_in_L2, bool icache, int r
   mb.rob = rob;
   mb.threadid = threadid;
 
-  logging::println(logging::DEBUG, "[vcpu {}] mb{}: allocated for address {} (iter {})", mb.threadid, idx,
-                   (void*)(Waddr)addr, machine.iterations);
+  machine.logger.println(logging::DEBUG, "[vcpu {}] mb{}: allocated for address {} (iter {})", mb.threadid, idx,
+                         (void*)(Waddr)addr, machine.iterations);
 
   if likely (hit_in_L2) {
-    logging::println(logging::DEBUG, "[vcpu {}] mb{}: enter state deliver to L1 on {} (iter {})", mb.threadid, idx,
-                     (void*)(Waddr)addr, machine.iterations);
+    machine.logger.println(logging::DEBUG, "[vcpu {}] mb{}: enter state deliver to L1 on {} (iter {})", mb.threadid,
+                           idx, (void*)(Waddr)addr, machine.iterations);
     mb.state = STATE_DELIVER_TO_L1;
     mb.cycles = L2_LATENCY;
 
@@ -396,8 +397,8 @@ int MissBuffer<SIZE>::initiate_miss(W64 addr, bool hit_in_L2, bool icache, int r
 #ifdef ENABLE_L3_CACHE
   bool L3hit = hierarchy->L3.probe(addr);
   if likely (L3hit) {
-    logging::println(logging::DEBUG, "[vcpu {}] mb{}: enter state deliver to L2 on {} (iter {})", mb.threadid, idx,
-                     (void*)(Waddr)addr, machine.iterations);
+    machine.logger.println(logging::DEBUG, "[vcpu {}] mb{}: enter state deliver to L2 on {} (iter {})", mb.threadid,
+                           idx, (void*)(Waddr)addr, machine.iterations);
     mb.state = STATE_DELIVER_TO_L2;
     mb.cycles = L3_LATENCY;
     if (mb.threadid <= 31) {
@@ -409,14 +410,14 @@ int MissBuffer<SIZE>::initiate_miss(W64 addr, bool hit_in_L2, bool icache, int r
     return idx;
   }
 
-  logging::println(logging::DEBUG, "[vcpu {}] mb{}: enter state deliver to L3 on {} (iter {})", mb.threadid, idx,
-                   (void*)(Waddr)addr, machine.iterations);
+  machine.logger.println(logging::DEBUG, "[vcpu {}] mb{}: enter state deliver to L3 on {} (iter {})", mb.threadid, idx,
+                         (void*)(Waddr)addr, machine.iterations);
   mb.state = STATE_DELIVER_TO_L3;
   mb.cycles = MAIN_MEM_LATENCY;
 #else
   // L3 cache disabled
-  logging::println(logging::DEBUG, "[vcpu {}] mb{}: enter state deliver to L2 on {} (iter {})", mb.threadid, idx,
-                   (void*)(Waddr)addr, machine.iterations);
+  machine.logger.println(logging::DEBUG, "[vcpu {}] mb{}: enter state deliver to L2 on {} (iter {})", mb.threadid, idx,
+                         (void*)(Waddr)addr, machine.iterations);
   mb.state = STATE_DELIVER_TO_L2;
   mb.cycles = MAIN_MEM_LATENCY;
 #endif
@@ -434,8 +435,8 @@ template<int SIZE>
 int MissBuffer<SIZE>::initiate_miss(LoadFillReq& req, bool hit_in_L2, int rob) {
   int lfrqslot = hierarchy->lfrq.add(req);
 
-  logging::println(logging::DEBUG, "[vcpu {}] missbuf.initiate_miss(L2hit? {}) -> lfrqslot {}", req.lsi.threadid,
-                   hit_in_L2, lfrqslot);
+  machine.logger.println(logging::DEBUG, "[vcpu {}] missbuf.initiate_miss(L2hit? {}) -> lfrqslot {}", req.lsi.threadid,
+                         hit_in_L2, lfrqslot);
 
   if unlikely (lfrqslot < 0)
     return -1;
@@ -466,8 +467,8 @@ void MissBuffer<SIZE>::clock() {
       break;
 #ifdef ENABLE_L3_CACHE
     case STATE_DELIVER_TO_L3: {
-      logging::println(logging::DEBUG, "[vcpu {}] mb{}: deliver {} to L3 ({} cycles left) (iter {})", mb.threadid, i,
-                       (void*)(Waddr)mb.addr, mb.cycles, machine.iterations);
+      machine.logger.println(logging::DEBUG, "[vcpu {}] mb{}: deliver {} to L3 ({} cycles left) (iter {})", mb.threadid,
+                             i, (void*)(Waddr)mb.addr, mb.cycles, machine.iterations);
       mb.cycles--;
       if unlikely (!mb.cycles) {
         hierarchy->L3.validate(mb.addr);
@@ -479,11 +480,11 @@ void MissBuffer<SIZE>::clock() {
     }
 #endif
     case STATE_DELIVER_TO_L2: {
-      logging::println(logging::DEBUG, "[vcpu {}] mb{}: deliver {} to L2 ({} cycles left) (iter {})", mb.threadid, i,
-                       (void*)(Waddr)mb.addr, mb.cycles, machine.iterations);
+      machine.logger.println(logging::DEBUG, "[vcpu {}] mb{}: deliver {} to L2 ({} cycles left) (iter {})", mb.threadid,
+                             i, (void*)(Waddr)mb.addr, mb.cycles, machine.iterations);
       mb.cycles--;
       if unlikely (!mb.cycles) {
-        logging::println(logging::DEBUG, "[vcpu {}] mb{}: delivered to L2", mb.threadid, i);
+        machine.logger.println(logging::DEBUG, "[vcpu {}] mb{}: delivered to L2", mb.threadid, i);
         hierarchy->L2.validate(mb.addr);
         mb.cycles = L2_LATENCY;
         mb.state = STATE_DELIVER_TO_L1;
@@ -492,15 +493,15 @@ void MissBuffer<SIZE>::clock() {
       break;
     }
     case STATE_DELIVER_TO_L1: {
-      logging::println(logging::DEBUG, "[vcpu {}] mb{}: deliver {} to L1 ({} cycles left) (iter {})", mb.threadid, i,
-                       (void*)(Waddr)mb.addr, mb.cycles, machine.iterations);
+      machine.logger.println(logging::DEBUG, "[vcpu {}] mb{}: deliver {} to L1 ({} cycles left) (iter {})", mb.threadid,
+                             i, (void*)(Waddr)mb.addr, mb.cycles, machine.iterations);
       mb.cycles--;
       if unlikely (!mb.cycles) {
-        logging::println(logging::DEBUG, "[vcpu {}] mb{}: delivered to L1 switch", mb.threadid, i);
+        machine.logger.println(logging::DEBUG, "[vcpu {}] mb{}: delivered to L1 switch", mb.threadid, i);
 
         if likely (mb.dcache) {
-          logging::println(logging::DEBUG, "[vcpu {}] mb{}: delivered {} to L1 dcache", mb.threadid, i,
-                           (void*)(Waddr)mb.addr);
+          machine.logger.println(logging::DEBUG, "[vcpu {}] mb{}: delivered {} to L1 dcache", mb.threadid, i,
+                                 (void*)(Waddr)mb.addr);
           // If the L2 line size is bigger than the L1 line size, this will validate multiple lines in the L1 when an L2 line arrives:
           // foreach (i, L2_LINE_SIZE / L1_LINE_SIZE) L1.validate(mb.addr + i*L1_LINE_SIZE, std::bitset<L1_LINE_SIZE>().set());
           hierarchy->L1.validate(mb.addr, std::bitset<L1_LINE_SIZE>().set());
@@ -509,8 +510,8 @@ void MissBuffer<SIZE>::clock() {
         }
         if unlikely (mb.icache) {
           // Sometimes we can initiate an icache miss on an existing dcache line in the missbuf
-          logging::println(logging::DEBUG, "[vcpu {}] mb{}: delivered {} to L1 icache", mb.threadid, i,
-                           (void*)(Waddr)mb.addr);
+          machine.logger.println(logging::DEBUG, "[vcpu {}] mb{}: delivered {} to L1 icache", mb.threadid, i,
+                                 (void*)(Waddr)mb.addr);
           // If the L2 line size is bigger than the L1 line size, this will validate multiple lines in the L1 when an L2 line arrives:
           // foreach (i, L2_LINE_SIZE / L1I_LINE_SIZE) L1I.validate(mb.addr + i*L1I_LINE_SIZE, std::bitset<L1I_LINE_SIZE>().set());
           hierarchy->L1I.validate(mb.addr, std::bitset<L1I_LINE_SIZE>().set());
@@ -588,11 +589,11 @@ int CacheHierarchy::issueload_slowpath(Waddr physaddr, SFR& sfra, LoadStoreInfo 
   //
 
   if (L1line)
-    logging::println(logging::TRACE, "issue_load_slowpath: L1line for {} = {} validmask ({})", (void*)(Waddr)physaddr,
-                     (void*)L1line, L1line->valid.to_string());
+    machine.logger.println(logging::TRACE, "issue_load_slowpath: L1line for {} = {} validmask ({})",
+                           (void*)(Waddr)physaddr, (void*)L1line, L1line->valid.to_string());
   else
-    logging::println(logging::TRACE, "issue_load_slowpath: L1line for {} = {} validmask (not found)",
-                     (void*)(Waddr)physaddr, (void*)L1line);
+    machine.logger.println(logging::TRACE, "issue_load_slowpath: L1line for {} = {} validmask (not found)",
+                           (void*)(Waddr)physaddr, (void*)L1line);
 
   if likely (!L1line) {
     //L1line = L1.select(physaddr);
@@ -614,10 +615,10 @@ int CacheHierarchy::issueload_slowpath(Waddr physaddr, SFR& sfra, LoadStoreInfo 
     L2hit =
         (lsi.sfrused) ? ((reqmask & (sframask | L2line->valid)) == reqmask) : ((reqmask & L2line->valid) == reqmask);
 #ifdef ISSUE_LOAD_STORE_DEBUG
-    logging::println(logging::DEBUG, "L2hit = {}", L2hit);
-    logging::println(logging::DEBUG, "  cachemask {}", L2line->valid);
-    logging::println(logging::DEBUG, "  sframask  {}", sframask);
-    logging::println(logging::DEBUG, "  reqmask   {}", reqmask);
+    machine.logger.println(logging::DEBUG, "L2hit = {}", L2hit);
+    machine.logger.println(logging::DEBUG, "  cachemask {}", L2line->valid);
+    machine.logger.println(logging::DEBUG, "  sframask  {}", sframask);
+    machine.logger.println(logging::DEBUG, "  reqmask   {}", reqmask);
 #endif
   }
 
@@ -654,9 +655,9 @@ int CacheHierarchy::issueload_slowpath(Waddr physaddr, SFR& sfra, LoadStoreInfo 
   int lfrqslot = missbuf.initiate_miss(req, L2hit, lsi.rob);
 
   if unlikely (lfrqslot < 0) {
-    logging::println(logging::DEBUG,
-                     "iteration {}: LFRQ or MB has no free entries for L2->L1: forcing LFRQFull exception",
-                     machine.iterations);
+    machine.logger.println(logging::DEBUG,
+                           "iteration {}: LFRQ or MB has no free entries for L2->L1: forcing LFRQFull exception",
+                           machine.iterations);
     stoptimer(load_slowpath_timer);
     return -1;
   }
@@ -745,7 +746,7 @@ void CacheHierarchy::initiate_prefetch(W64 addr, int cachelevel, int threadid) {
       return; // only move up to L2 level, and it's already there
   }
 
-  logging::println(logging::DEBUG, "Prefetch requested for {} to cache level {}", (void*)(Waddr)addr, cachelevel);
+  machine.logger.println(logging::DEBUG, "Prefetch requested for {} to cache level {}", (void*)(Waddr)addr, cachelevel);
 
   missbuf.initiate_miss(
       addr, L2line,
@@ -769,8 +770,8 @@ int CacheHierarchy::initiate_icache_miss(W64 addr, int rob, int threadid) {
   bool line_in_L2 = (L2.probe(addr) != null);
   int mb = missbuf.initiate_miss(addr, L2.probe(addr), true, rob, threadid);
 
-  logging::println(logging::DEBUG, "[vcpu {}] Initiate icache miss on {} to missbuf {} ({})", threadid,
-                   (void*)(Waddr)addr, mb, (line_in_L2 ? "in L2" : "not in L2"));
+  machine.logger.println(logging::DEBUG, "[vcpu {}] Initiate icache miss on {} to missbuf {} ({})", threadid,
+                         (void*)(Waddr)addr, mb, (line_in_L2 ? "in L2" : "not in L2"));
 
   return mb;
 }
@@ -828,8 +829,8 @@ void CacheHierarchy::clock() {
 #ifdef ENABLE_L3_CACHE
     L3.clearstats();
 #endif
-    logging::println(logging::INFO, "Clearing cache statistics to prevent wraparound...");
-    logging::flush();
+    machine.logger.println(logging::INFO, "Clearing cache statistics to prevent wraparound...");
+    machine.logger.flush();
   }
 
   lfrq.clock();
@@ -899,8 +900,8 @@ m[4] = (bit(i, 4) ? 0xff : 0x00);
 m[5] = (bit(i, 5) ? 0xff : 0x00);
 m[6] = (bit(i, 6) ? 0xff : 0x00);
 m[7] = (bit(i, 7) ? 0xff : 0x00);
-logging::print(logging::INFO, "  0x{:016x}, ", expand_8bit_to_64bit_lut[i]);
-if ((i & 3) == 3) logging::println(logging::INFO, "")
+machine.logger.print(logging::INFO, "  0x{:016x}, ", expand_8bit_to_64bit_lut[i]);
+if ((i & 3) == 3) machine.logger.println(logging::INFO, "")
 }
 */
 

@@ -1673,7 +1673,7 @@ struct OutOfOrderCore {
 
 inline ThreadContext::ThreadContext(OutOfOrderCore& core_, int threadid_)
     : core(core_), threadid(threadid_), config(core_.machine.config), ctx(config, core_.machine, threadid_),
-      branchpred(config) {
+      branchpred(config, core_.machine.logger) {
   reset();
 }
 

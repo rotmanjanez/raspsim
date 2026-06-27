@@ -609,6 +609,10 @@ enum {
 };
 
 struct BasicBlockCache : public SelfHashtable<RIPVirtPhys, BasicBlock, BB_CACHE_SIZE, BasicBlockHashtableLinkManager> {
+  // Back-pointer to the owning machine, set right after construction, so the
+  // cache's methods can log against that machine's per-instance logger.
+  MachineImpl* machine = nullptr;
+
   BasicBlockCache() : SelfHashtable<RIPVirtPhys, BasicBlock, BB_CACHE_SIZE, BasicBlockHashtableLinkManager>() {}
   ~BasicBlockCache();
 

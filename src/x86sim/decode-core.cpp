@@ -518,7 +518,7 @@ bool TraceDecoder::flush() {
   bool overflow = (transbufcount >= ((MAX_BB_UOPS - 2) - bb.count));
 
   if unlikely (overflow) {
-    logging::println(
+    machine->logger.println(
         logging::DEBUG,
         "Basic block overflowed (too many uops) during decode of {} (ripstart {}): req {} uops but only have {} free",
         W64(bb.rip), (void*)ripstart, transbufcount, ((MAX_BB_UOPS - 2) - bb.count));
@@ -576,8 +576,8 @@ bool TraceDecoder::flush() {
 
   if unlikely (no_partial_flag_updates_per_insn) {
     if unlikely ((flag_sets_set != 0) && (flag_sets_set != (SETFLAG_ZF | SETFLAG_CF | SETFLAG_OF))) {
-      logging::println(logging::ERROR, "Invalid partial flag sets at rip {} (flag sets {})", (void*)ripstart,
-                       flag_sets_set);
+      machine->logger.println(logging::ERROR, "Invalid partial flag sets at rip {} (flag sets {})", (void*)ripstart,
+                              flag_sets_set);
       assert(false);
     }
   }
@@ -585,10 +585,10 @@ bool TraceDecoder::flush() {
   foreach (i, transbufcount) {
     TransOp& transop = transbuf[i];
     if unlikely (bb.count >= MAX_BB_UOPS) {
-      logging::println(logging::ERROR,
-                       "ERROR: Too many transops ({}) in basic block {} (current RIP: {}) (max {} allowed)", bb.count,
-                       W64(bb.rip), (void*)ripstart, MAX_BB_UOPS);
-      logging::println(logging::ERROR, "{}", bb);
+      machine->logger.println(logging::ERROR,
+                              "ERROR: Too many transops ({}) in basic block {} (current RIP: {}) (max {} allowed)",
+                              bb.count, W64(bb.rip), (void*)ripstart, MAX_BB_UOPS);
+      machine->logger.println(logging::ERROR, "{}", bb);
       assert(bb.count < MAX_BB_UOPS);
     }
 
@@ -1467,19 +1467,19 @@ void TraceDecoder::split(bool after) {
 void print_invalid_insns(MachineImpl& machine, int op, const byte* ripstart, const byte* rip, int valid_byte_count,
                          const PageFaultErrorCode& pfec, Waddr faultaddr) {
   if (pfec) {
-    logging::println(
+    machine.logger.println(
         logging::INFO,
         "translate: page fault at iteration {}, {}, commits: ripstart {}, rip {}: required {} more bytes but "
         "only fetched {} bytes; page fault error code: {}",
         machine.iterations, machine.total_user_insns_committed, (const void*)ripstart, (const void*)rip,
         (rip - ripstart), valid_byte_count, pfec);
-    logging::flush();
+    machine.logger.flush();
   } else {
-    logging::println(
+    machine.logger.println(
         logging::INFO,
         "translate: invalid opcode at iteration {}: {} commits (at ripstart {}, rip {}); may be speculative",
         machine.iterations, machine.total_user_insns_committed, (const void*)ripstart, (const void*)rip);
-    logging::flush();
+    machine.logger.flush();
 #if 0
     if (!config.dumpcode_filename.empty()) {
       byte insnbuf[256];
@@ -1507,30 +1507,31 @@ BasicBlockCache::~BasicBlockCache() {
 bool BasicBlockCache::invalidate(BasicBlock* bb, int reason) {
   BasicBlockChunkList* pagelist;
   if unlikely (bb->refcount) {
-    logging::println(logging::INFO, "Warning: basic block {} <bb> is still in use somewhere (refcount {})", (void*)bb,
-                     bb->refcount);
+    machine->logger.println(logging::INFO, "Warning: basic block {} <bb> is still in use somewhere (refcount {})",
+                            (void*)bb, bb->refcount);
     return false;
   }
 
   if unlikely (bbcache_dump_file) {
     if (std::fwrite(static_cast<BasicBlockBase*>(bb), sizeof(BasicBlockBase), 1, bbcache_dump_file) != 1 ||
         std::fwrite(bb->transops, sizeof(TransOp), bb->count, bbcache_dump_file) != (size_t)bb->count) {
-      logging::println(logging::WARNING, "Failed to write basic block {} to bb dump file", (void*)bb);
+      machine->logger.println(logging::WARNING, "Failed to write basic block {} to bb dump file", (void*)bb);
     }
   }
 
   pagelist = pages_.get(bb->rip.mfnlo);
-  logging::println(logging::INFO, "Remove bb {} ({}, {} bytes) from low page list {}: loc {}:{}", (void*)bb,
-                   (void*)(Waddr)bb->rip, bb->bytes, (void*)pagelist, (void*)bb->mfnlo_loc.chunk, bb->mfnlo_loc.index);
+  machine->logger.println(logging::INFO, "Remove bb {} ({}, {} bytes) from low page list {}: loc {}:{}", (void*)bb,
+                          (void*)(Waddr)bb->rip, bb->bytes, (void*)pagelist, (void*)bb->mfnlo_loc.chunk,
+                          bb->mfnlo_loc.index);
   assert(pagelist);
   pagelist->remove(bb->mfnlo_loc);
 
   int page_crossing = ((lowbits(bb->rip, 12) + (bb->bytes - 1)) >> 12);
   if (page_crossing) {
     pagelist = pages_.get(bb->rip.mfnhi);
-    logging::println(logging::DEBUG, "Remove bb {} ({}, {} bytes) from high page list {}: loc {}:{}", (void*)bb,
-                     (void*)(Waddr)bb->rip, bb->bytes, (void*)pagelist, (void*)bb->mfnhi_loc.chunk,
-                     bb->mfnhi_loc.index);
+    machine->logger.println(logging::DEBUG, "Remove bb {} ({}, {} bytes) from high page list {}: loc {}:{}", (void*)bb,
+                            (void*)(Waddr)bb->rip, bb->bytes, (void*)pagelist, (void*)bb->mfnhi_loc.chunk,
+                            bb->mfnhi_loc.index);
     assert(pagelist);
     pagelist->remove(bb->mfnhi_loc);
   }
@@ -1581,8 +1582,8 @@ bool BasicBlockCache::invalidate_page(AddressSpace& asp, Waddr mfn, int reason) 
   BasicBlockChunkList* pagelist = pages_.get(mfn);
 
   if (log_code_page_ops)
-    logging::println(logging::INFO, "Invalidate page mfn {}: pagelist {} has {} entries (dirty? {})", mfn,
-                     (void*)pagelist, (pagelist ? pagelist->count() : 0), asp.isdirty(mfn));
+    machine->logger.println(logging::INFO, "Invalidate page mfn {}: pagelist {} has {} entries (dirty? {})", mfn,
+                            (void*)pagelist, (pagelist ? pagelist->count() : 0), asp.isdirty(mfn));
 
   asp.cleardirty(mfn);
 
@@ -1603,14 +1604,14 @@ bool BasicBlockCache::invalidate_page(AddressSpace& asp, Waddr mfn, int reason) 
 
     BasicBlock* bb = *iter.next();
     if (log_code_page_ops) {
-      logging::println(logging::DEBUG, "  Invalidate bb {} ({}, {} bytes)", (void*)bb, (void*)(Waddr)bb->rip,
-                       bb->bytes);
+      machine->logger.println(logging::DEBUG, "  Invalidate bb {} ({}, {} bytes)", (void*)bb, (void*)(Waddr)bb->rip,
+                              bb->bytes);
     }
 
     if unlikely (!invalidate(bb, reason)) {
       if (log_code_page_ops) {
-        logging::println(logging::DEBUG, "  Could not invalidate bb {} ({}, {} bytes): still has refcount {}",
-                         (void*)bb, bb->rip, bb->bytes, bb->refcount);
+        machine->logger.println(logging::DEBUG, "  Could not invalidate bb {} ({}, {} bytes): still has refcount {}",
+                                (void*)bb, bb->rip, bb->bytes, bb->refcount);
       }
       return false;
     }
@@ -1635,7 +1636,7 @@ int BasicBlockCache::reclaim(size_t bytesreq, int urgency) {
   if (!count)
     return 0;
 
-  logging::println(logging::DEBUG, "Reclaiming cached basic blocks:");
+  machine->logger.println(logging::DEBUG, "Reclaiming cached basic blocks:");
 
   stats.decoder.reclaim_rounds++;
 
@@ -1667,11 +1668,11 @@ int BasicBlockCache::reclaim(size_t bytesreq, int urgency) {
     average = std::numeric_limits<W64s>::max();
   }
 
-  logging::println(logging::DEBUG, "Before:");
-  logging::println(logging::DEBUG, "  Basic blocks:   {:>12}", count);
-  logging::println(logging::DEBUG, "  Oldest cycle:   {:>12}", oldest);
-  logging::println(logging::DEBUG, "  Average cycle:  {:>12}", average);
-  logging::println(logging::DEBUG, "  Newest cycle:   {:>12}", newest);
+  machine->logger.println(logging::DEBUG, "Before:");
+  machine->logger.println(logging::DEBUG, "  Basic blocks:   {:>12}", count);
+  machine->logger.println(logging::DEBUG, "  Oldest cycle:   {:>12}", oldest);
+  machine->logger.println(logging::DEBUG, "  Average cycle:  {:>12}", average);
+  machine->logger.println(logging::DEBUG, "  Newest cycle:   {:>12}", newest);
 
   //
   // Reclaim all objects older than the average
@@ -1687,8 +1688,8 @@ int BasicBlockCache::reclaim(size_t bytesreq, int urgency) {
       // If this is required, the pipeline must be flushed before
       // the forced invalidation can occur.
       //
-      logging::println(logging::INFO, "Warning: eligible bb {} {} (lastused {}) still has refcount {}", (void*)bb,
-                       (void*)(Waddr)bb->rip, bb->lastused, bb->refcount);
+      machine->logger.println(logging::INFO, "Warning: eligible bb {} {} (lastused {}) still has refcount {}",
+                              (void*)bb, (void*)(Waddr)bb->rip, bb->lastused, bb->refcount);
       continue;
     }
 
@@ -1700,10 +1701,10 @@ int BasicBlockCache::reclaim(size_t bytesreq, int urgency) {
     n++;
   }
 
-  logging::println(logging::DEBUG, "After:");
-  logging::println(logging::DEBUG, "  Basic blocks:   {:>12} BBs reclaimed", reclaimed_objs);
-  logging::println(logging::DEBUG, "  New pool size:  {:>12} BBs", count);
-  logging::flush();
+  machine->logger.println(logging::DEBUG, "After:");
+  machine->logger.println(logging::DEBUG, "  Basic blocks:   {:>12} BBs reclaimed", reclaimed_objs);
+  machine->logger.println(logging::DEBUG, "  New pool size:  {:>12} BBs", count);
+  machine->logger.flush();
 
 
   //
@@ -1715,21 +1716,21 @@ int BasicBlockCache::reclaim(size_t bytesreq, int urgency) {
     BasicBlockChunkList* page;
     int pages_freed = 0;
 
-    logging::println(logging::DEBUG, "Scanning {} code pages:", pages_.count);
+    machine->logger.println(logging::DEBUG, "Scanning {} code pages:", pages_.count);
     while ((page = iter.next())) {
       if (page->empty()) {
         if (!page->refcount) {
-          logging::println(logging::DEBUG, "  mfn {} has no entries; freeing", page->mfn);
+          machine->logger.println(logging::DEBUG, "  mfn {} has no entries; freeing", page->mfn);
           pages_.remove(page);
           delete page;
           pages_freed++;
         } else {
-          logging::println(logging::DEBUG, "  mfn {} still has refs to it: cannot free it yet", page->mfn);
+          machine->logger.println(logging::DEBUG, "  mfn {} still has refs to it: cannot free it yet", page->mfn);
         }
       }
     }
 
-    logging::println(logging::DEBUG, "Freed {} empty pages", pages_freed);
+    machine->logger.println(logging::DEBUG, "Freed {} empty pages", pages_freed);
   }
 
   return n;
@@ -1741,7 +1742,7 @@ int BasicBlockCache::reclaim(size_t bytesreq, int urgency) {
 // references are allowed.
 //
 void BasicBlockCache::flush() {
-  logging::println(logging::DEBUG, "Flushing basic block cache:");
+  machine->logger.println(logging::DEBUG, "Flushing basic block cache:");
 
   stats.decoder.reclaim_rounds++;
 
@@ -1784,7 +1785,7 @@ void assist_exec_page_fault(Context& ctx) {
 
   bool page_now_valid = ctx.address_space->check(faultaddr, Protection::execute);
   if unlikely (page_now_valid) {
-    logging::println(
+    ctx.machine_impl->logger.println(
         logging::WARNING,
         "Spurious PageFaultOnExec detected at fault rip {} with faultaddr {} @ {} user commits ({} cycles)",
         (void*)(Waddr)ctx.commitarf[REG_selfrip], (void*)faultaddr, ctx.machine_impl->total_user_insns_committed,
@@ -1807,7 +1808,7 @@ void assist_gp_fault(Context& ctx) {
 bool TraceDecoder::invalidate() {
   if likely ((rip - bb.rip) > valid_byte_count) {
     int mfn = 0;
-    logging::println(
+    machine->logger.println(
         logging::WARNING,
         "Translation crosses into invalid page (mfn {}): ripstart {}, rip {}, faultaddr {}; expected {} bytes "
         "but only got {} (next page {})",
@@ -1836,8 +1837,9 @@ bool TraceDecoder::invalidate() {
     if (outcome == DECODE_OUTCOME_OK)
       outcome = DECODE_OUTCOME_INVALID_OPCODE;
 
-    logging::println(logging::WARNING, "Invalid opcode at {}: split_invalid_basic_blocks {}, first_insn_in_bb? {}",
-                     (void*)ripstart, split_invalid_basic_blocks, first_insn_in_bb());
+    machine->logger.println(logging::WARNING,
+                            "Invalid opcode at {}: split_invalid_basic_blocks {}, first_insn_in_bb? {}",
+                            (void*)ripstart, split_invalid_basic_blocks, first_insn_in_bb());
     print_invalid_insns(*machine, op, (const byte*)ripstart, (const byte*)rip, valid_byte_count, 0, faultaddr);
 
     if likely (split_invalid_basic_blocks && (!first_insn_in_bb())) {
@@ -1862,7 +1864,7 @@ bool TraceDecoder::invalidate() {
         microcode_assist(ASSIST_GP_FAULT, ripstart, rip);
         break;
       default:
-        logging::println(logging::ERROR, "Unexpected decoder outcome: {}", outcome);
+        machine->logger.println(logging::ERROR, "Unexpected decoder outcome: {}", outcome);
         break;
       }
     }
@@ -1976,7 +1978,7 @@ bool TraceDecoder::translate() {
       if (prefixes & (1 << i))
         prefix_str += std::format(" {}", prefix_names[i]);
     }
-    logging::println(logging::DEBUG, "prefixes = {}:{}", prefixes, prefix_str);
+    machine->logger.println(logging::DEBUG, "prefixes = {}:{}", prefixes, prefix_str);
   }
 
   if (prefixes & PFX_ADDR)
@@ -2016,7 +2018,8 @@ bool TraceDecoder::translate() {
 
   bool rc;
 
-  logging::println(logging::DEBUG, "Decoding op {} (class {}) @ {}", hexstring(op, 12), (op >> 8), (void*)ripstart);
+  machine->logger.println(logging::DEBUG, "Decoding op {} (class {}) @ {}", hexstring(op, 12), (op >> 8),
+                          (void*)ripstart);
 
   is_x87 = 0;
   is_sse = 0;
@@ -2085,12 +2088,13 @@ bool TraceDecoder::translate() {
     if ( // ((MAX_BB_UOPS - bb.count) < (MAX_TRANSOPS_PER_USER_INSN-2)) ||
         ((rip - bb.rip) >= (insnbytes_bufsize - 15)) || ((rip - bb.rip) >= valid_byte_count) ||
         (user_insn_count >= MAX_BB_X86_INSNS) || (rip == stop_at_rip)) {
-      logging::println(logging::DEBUG, "Basic block {} too long: cutting at {} transops ({} currently in buffer)",
-                       (void*)(Waddr)bb.rip, bb.count, transbufcount);
+      machine->logger.println(logging::DEBUG,
+                              "Basic block {} too long: cutting at {} transops ({} currently in buffer)",
+                              (void*)(Waddr)bb.rip, bb.count, transbufcount);
       // bb.rip_taken and bb.rip_not_taken were already filled out for the last instruction.
       if unlikely (!last_flags_update_was_atomic) {
-        logging::println(logging::DEBUG, "Basic block {} had non-atomic flags update: adding collcc",
-                         (void*)(Waddr)bb.rip);
+        machine->logger.println(logging::DEBUG, "Basic block {} had non-atomic flags update: adding collcc",
+                                (void*)(Waddr)bb.rip);
         put(TransOp(OP_collcc, REG_temp0, REG_zf, REG_cf, REG_of, 3, 0, 0, FLAGS_DEFAULT_ALU));
       }
       split_after();
@@ -2132,19 +2136,19 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, const RIPVirtPhys& rvp) {
 
   if unlikely ((rvp.rip == config.log.start_log_at_rip) && (rvp.rip != 0xffffffffffffffffULL)) {
     config.log.start_log_at_iteration = 0;
-    logenable = 1;
+    machine->logger.set_enabled(true);
   }
 
   if unlikely (asp.isdirty(rvp.mfnlo)) {
     if (log_code_page_ops)
-      logging::println(logging::TRACE, "Pre-invalidate low mfn for {}", rvp);
+      machine->logger.println(logging::TRACE, "Pre-invalidate low mfn for {}", rvp);
     if unlikely (!invalidate_page(asp, rvp.mfnlo, INVALIDATE_REASON_DIRTY))
       return null;
   }
 
   if unlikely (asp.isdirty(rvp.mfnhi)) {
     if (log_code_page_ops)
-      logging::println(logging::TRACE, "Pre-invalidate high mfn for {}", rvp);
+      machine->logger.println(logging::TRACE, "Pre-invalidate high mfn for {}", rvp);
     if unlikely (!invalidate_page(asp, rvp.mfnhi, INVALIDATE_REASON_DIRTY))
       return null;
   }
@@ -2159,8 +2163,9 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, const RIPVirtPhys& rvp) {
   trans.fillbuf(ctx, insnbuf, sizeof(insnbuf));
 
   if (log_code_page_ops) {
-    logging::println(logging::INFO, "Translating {} ({} bytes valid) at {} cycles, {} commits", rvp,
-                     trans.valid_byte_count, ctx.machine_impl->sim_cycle, ctx.machine_impl->total_user_insns_committed);
+    machine->logger.println(logging::INFO, "Translating {} ({} bytes valid) at {} cycles, {} commits", rvp,
+                            trans.valid_byte_count, ctx.machine_impl->sim_cycle,
+                            ctx.machine_impl->total_user_insns_committed);
   }
 
   if (rvp.mfnlo == RIPVirtPhys::INVALID) {
@@ -2168,7 +2173,7 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, const RIPVirtPhys& rvp) {
   }
 
   for (;;) {
-    logging::println(logging::DEBUG, "rip {}, relrip = {}", (void*)trans.rip, (void*)(trans.rip - trans.bb.rip));
+    machine->logger.println(logging::DEBUG, "rip {}, relrip = {}", (void*)trans.rip, (void*)(trans.rip - trans.bb.rip));
     if (!trans.translate())
       break;
   }
@@ -2211,8 +2216,8 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, const RIPVirtPhys& rvp) {
   //
   pagelist->add(bb, bb->mfnlo_loc);
   if (log_code_page_ops)
-    logging::println(logging::TRACE, "Add bb {} ({}, {} bytes) to low page list {}: loc {}:{}", (void*)bb, bb->rip,
-                     bb->bytes, (void*)pagelist, (void*)bb->mfnlo_loc.chunk, bb->mfnlo_loc.index);
+    machine->logger.println(logging::TRACE, "Add bb {} ({}, {} bytes) to low page list {}: loc {}:{}", (void*)bb,
+                            bb->rip, bb->bytes, (void*)pagelist, (void*)bb->mfnlo_loc.chunk, bb->mfnlo_loc.index);
 
   int page_crossing = ((lowbits(bb->rip, 12) + (bb->bytes - 1)) >> 12);
 
@@ -2229,18 +2234,19 @@ BasicBlock* BasicBlockCache::translate(Context& ctx, const RIPVirtPhys& rvp) {
     }
     pagelisthi->refcount++;
     pagelisthi->add(bb, bb->mfnhi_loc);
-    logging::println(logging::TRACE, "Add bb {} ({}, {} bytes) to high page list {}: loc {}:{}", (void*)bb,
-                     (void*)(Waddr)bb->rip, bb->bytes, (void*)pagelisthi, (void*)bb->mfnhi_loc.chunk,
-                     bb->mfnhi_loc.index);
+    machine->logger.println(logging::TRACE, "Add bb {} ({}, {} bytes) to high page list {}: loc {}:{}", (void*)bb,
+                            (void*)(Waddr)bb->rip, bb->bytes, (void*)pagelisthi, (void*)bb->mfnhi_loc.chunk,
+                            bb->mfnhi_loc.index);
     pagelisthi->refcount--;
   }
 
   pagelist->refcount--;
 
-  logging::println(logging::DEBUG, "=====================================================================");
-  logging::println(logging::DEBUG, "{}", *bb);
-  logging::println(logging::DEBUG, "End of basic block: rip {} -> taken rip 0x{}, not taken rip 0x{}",
-                   (void*)(Waddr)trans.bb.rip, (void*)(Waddr)trans.bb.rip_taken, (void*)(Waddr)trans.bb.rip_not_taken);
+  machine->logger.println(logging::DEBUG, "=====================================================================");
+  machine->logger.println(logging::DEBUG, "{}", *bb);
+  machine->logger.println(logging::DEBUG, "End of basic block: rip {} -> taken rip 0x{}, not taken rip 0x{}",
+                          (void*)(Waddr)trans.bb.rip, (void*)(Waddr)trans.bb.rip_taken,
+                          (void*)(Waddr)trans.bb.rip_not_taken);
 
   bb->release();
 
@@ -2263,7 +2269,7 @@ void BasicBlockCache::translate_in_place(BasicBlock& targetbb, Context& ctx, Wad
 
   if unlikely ((rip == config.log.start_log_at_rip) && (rip != MAX_RIP)) {
     config.log.start_log_at_iteration = 0;
-    logenable = 1;
+    machine->logger.set_enabled(true);
   }
 
   RIPVirtPhys rvp = rip;
@@ -2275,8 +2281,9 @@ void BasicBlockCache::translate_in_place(BasicBlock& targetbb, Context& ctx, Wad
   trans.fillbuf(ctx, insnbuf, sizeof(insnbuf));
 
   if (log_code_page_ops) {
-    logging::println(logging::INFO, "Translating {} ({} bytes valid) at {} cycles, {} commits", W64(rvp),
-                     trans.valid_byte_count, ctx.machine_impl->sim_cycle, ctx.machine_impl->total_user_insns_committed);
+    machine->logger.println(logging::INFO, "Translating {} ({} bytes valid) at {} cycles, {} commits", W64(rvp),
+                            trans.valid_byte_count, ctx.machine_impl->sim_cycle,
+                            ctx.machine_impl->total_user_insns_committed);
   }
 
   for (;;) {
@@ -2290,10 +2297,11 @@ void BasicBlockCache::translate_in_place(BasicBlock& targetbb, Context& ctx, Wad
   memcpy(&targetbb, &trans.bb, sizeof(BasicBlockBase));
   memcpy(&targetbb.transops, &trans.bb.transops, trans.bb.count * sizeof(TransOp));
 
-  logging::println(logging::DEBUG, "=====================================================================");
-  logging::println(logging::DEBUG, "{}", targetbb);
-  logging::println(logging::DEBUG, "End of basic block: rip {} -> taken rip 0x{}, not taken rip 0x{}",
-                   (void*)(Waddr)trans.bb.rip, (void*)(Waddr)trans.bb.rip_taken, (void*)(Waddr)trans.bb.rip_not_taken);
+  machine->logger.println(logging::DEBUG, "=====================================================================");
+  machine->logger.println(logging::DEBUG, "{}", targetbb);
+  machine->logger.println(logging::DEBUG, "End of basic block: rip {} -> taken rip 0x{}, not taken rip 0x{}",
+                          (void*)(Waddr)trans.bb.rip, (void*)(Waddr)trans.bb.rip_taken,
+                          (void*)(Waddr)trans.bb.rip_not_taken);
 }
 
 BasicBlock* BasicBlockCache::translate_and_clone(Context& ctx, Waddr rip) {
@@ -2301,7 +2309,7 @@ BasicBlock* BasicBlockCache::translate_and_clone(Context& ctx, Waddr rip) {
 
   if unlikely ((rip == config.log.start_log_at_rip) && (rip != MAX_RIP)) {
     config.log.start_log_at_iteration = 0;
-    logenable = 1;
+    machine->logger.set_enabled(true);
   }
 
   RIPVirtPhys rvp = rip;
@@ -2313,8 +2321,9 @@ BasicBlock* BasicBlockCache::translate_and_clone(Context& ctx, Waddr rip) {
   trans.fillbuf(ctx, insnbuf, sizeof(insnbuf));
 
   if (log_code_page_ops) {
-    logging::println(logging::INFO, "Translating {} ({} bytes valid) at {} cycles, {} commits", W64(rvp),
-                     trans.valid_byte_count, ctx.machine_impl->sim_cycle, ctx.machine_impl->total_user_insns_committed);
+    machine->logger.println(logging::INFO, "Translating {} ({} bytes valid) at {} cycles, {} commits", W64(rvp),
+                            trans.valid_byte_count, ctx.machine_impl->sim_cycle,
+                            ctx.machine_impl->total_user_insns_committed);
   }
 
   for (;;) {

@@ -299,10 +299,13 @@ void AddressSpace::map_or_throw(address_t start, std::uint64_t size, Protection 
 }
 
 void AddressSpace::setattr(address_t start, std::uint64_t size, Protection prot) {
-  logging::println(
-      "setattr: region {} to {} ({} KB) has user-visible attributes {}{}{}", reinterpret_cast<void*>(start),
-      reinterpret_cast<void*>(start + size), size >> 10, (has_protection(prot, Protection::read) ? 'r' : '-'),
-      (has_protection(prot, Protection::write) ? 'w' : '-'), (has_protection(prot, Protection::execute) ? 'x' : '-'));
+  // machine_ may still be null here (setattr runs during construction/clone
+  // before the back-reference is wired up), in which case there is no logger.
+  if (machine_)
+    machine_->logger.println(
+        "setattr: region {} to {} ({} KB) has user-visible attributes {}{}{}", reinterpret_cast<void*>(start),
+        reinterpret_cast<void*>(start + size), size >> 10, (has_protection(prot, Protection::read) ? 'r' : '-'),
+        (has_protection(prot, Protection::write) ? 'w' : '-'), (has_protection(prot, Protection::execute) ? 'x' : '-'));
 
   if (has_protection(prot, Protection::read))
     make_accessible(start, size, *readmap_);

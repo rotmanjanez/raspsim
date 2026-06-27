@@ -137,6 +137,10 @@ struct TransactionalMemory {
   W16s sets[setcount];
   int count;
 
+  // Set by the owning SequentialCore so the (currently unused) commit path can
+  // log against that machine's logger rather than a global.
+  logging::Logger* logger = nullptr;
+
   TransactionalMemory() { reset(); }
 
   void reset() {
@@ -234,7 +238,7 @@ struct TransactionalMemory {
   }
 
   static W64 loadimpl(W64 addr);
-  static W64 storeimpl(W64 addr, W64 data, byte bytemask);
+  W64 storeimpl(W64 addr, W64 data, byte bytemask);
 
   /*
 
@@ -310,11 +314,13 @@ W64 TransactionalMemory<N, setcount>::loadimpl(W64 physaddr) {
 
 template<int N, int setcount>
 W64 TransactionalMemory<N, setcount>::storeimpl(W64 physaddr, W64 data, byte bytemask) {
-  logging::println(logging::DEBUG, "Before storeimpl: physaddr {} => mfn {}, data {}", (void*)physaddr,
-                   (physaddr >> 12), bytemaskstring((const byte*)&data, bytemask, 8));
+  if (logger)
+    logger->println(logging::DEBUG, "Before storeimpl: physaddr {} => mfn {}, data {}", (void*)physaddr,
+                    (physaddr >> 12), bytemaskstring((const byte*)&data, bytemask, 8));
   W64 rc = storemask(physaddr, data, bytemask);
-  logging::println(logging::DEBUG, "After storeimpl: physaddr {} => mfn {}, data {} => rc {}", (void*)physaddr,
-                   (physaddr >> 12), bytemaskstring((const byte*)&data, bytemask, 8), (void*)rc);
+  if (logger)
+    logger->println(logging::DEBUG, "After storeimpl: physaddr {} => mfn {}, data {} => rc {}", (void*)physaddr,
+                    (physaddr >> 12), bytemaskstring((const byte*)&data, bytemask, 8), (void*)rc);
   return rc;
 }
 
@@ -583,7 +589,7 @@ void SequentialCoreEventLog::print(bool only_to_tail) {
   size_t limit = (only_to_tail) ? (tail - start) : bufsize;
 
   if (!config.log.flush_event_log_every_cycle)
-    logging::println(logging::INFO, "#-------- Start of event log --------");
+    machine->logger.println(logging::INFO, "#-------- Start of event log --------");
 
   W64 cycle = std::numeric_limits<W64>::max();
   foreach (i, limit) {
@@ -599,21 +605,21 @@ void SequentialCoreEventLog::print(bool only_to_tail) {
 
     if (p->type == EVENT_EXECUTE_BB) {
       foreach (i, 24)
-        logging::print(logging::INFO, "--------");
-      logging::println(logging::INFO, "");
+        machine->logger.print(logging::INFO, "--------");
+      machine->logger.println(logging::INFO, "");
     }
 
     if unlikely (p->cycle != cycle) {
       cycle = p->cycle;
-      logging::println(logging::INFO, "Cycle {}:", cycle);
+      machine->logger.println(logging::INFO, "Cycle {}:", cycle);
     }
 
-    logging::print(logging::INFO, "{}", *p);
+    machine->logger.print(logging::INFO, "{}", *p);
     p++;
   }
 
   if (!config.log.flush_event_log_every_cycle)
-    logging::println(logging::INFO, "#-------- End of event log --------");
+    machine->logger.println(logging::INFO, "#-------- End of event log --------");
 }
 
 static SequentialCoreEventLog eventlog;
@@ -626,7 +632,9 @@ struct SequentialCore {
   bool runnable = true;
 
   SequentialCore(SequentialMachine& machine_, int core_id, CommitRecord* cmtrec_ = null)
-      : machine(machine_), config(machine_.config), ctx(config, machine_, core_id), cmtrec(cmtrec_) {}
+      : machine(machine_), config(machine_.config), ctx(config, machine_, core_id), cmtrec(cmtrec_) {
+    transactmem.logger = &machine.logger;
+  }
 
   BasicBlock* current_basic_block;
   int bytes_in_current_insn;
@@ -657,23 +665,23 @@ struct SequentialCore {
   TransactionalMemory<MAX_STORES_IN_COMMIT_RECORD, 16> transactmem;
 
   void print_state() {
-    logging::println("General state:");
-    logging::println("  RIP:                {}", (void*)(Waddr)arf[REG_rip]);
-    logging::println("  Flags:              {:04x} {}", arf[REG_flags], flagstring(arf[REG_flags]));
-    logging::println("  UUID:               {}", current_uuid);
-    logging::println("  Bytes in macro-op:  {}", bytes_in_current_insn);
-    logging::println("  Uop in macro-op:    {}", current_uop_in_macro_op);
-    logging::println("Basic block state:");
-    logging::println("  BBcache block:      {}", (void*)current_basic_block);
-    logging::println("  uop count in block: {}", ((current_basic_block) ? current_basic_block->count : 0));
-    logging::println("Register state:");
+    machine.logger.println("General state:");
+    machine.logger.println("  RIP:                {}", (void*)(Waddr)arf[REG_rip]);
+    machine.logger.println("  Flags:              {:04x} {}", arf[REG_flags], flagstring(arf[REG_flags]));
+    machine.logger.println("  UUID:               {}", current_uuid);
+    machine.logger.println("  Bytes in macro-op:  {}", bytes_in_current_insn);
+    machine.logger.println("  Uop in macro-op:    {}", current_uop_in_macro_op);
+    machine.logger.println("Basic block state:");
+    machine.logger.println("  BBcache block:      {}", (void*)current_basic_block);
+    machine.logger.println("  uop count in block: {}", ((current_basic_block) ? current_basic_block->count : 0));
+    machine.logger.println("Register state:");
 
     static const int width = 4;
     foreach (i, TRANSREG_COUNT) {
       std::string flagsb = std::format("{}", flagstring(arflags[i]));
-      logging::print("    {:<6} 0x{:016x}|{:<6}  ", arch_reg_names[i], arf[i], flagsb);
+      machine.logger.print("    {:<6} 0x{:016x}|{:<6}  ", arch_reg_names[i], arf[i], flagsb);
       if ((i % width) == (width - 1))
-        logging::println("");
+        machine.logger.println("");
     }
   }
 
@@ -899,8 +907,8 @@ struct SequentialCore {
       if unlikely (cmtrec) {
         data = transactmem.load(state.physaddr << 3);
       } else {
-        logging::println("[cycle {}] load from physaddr {} for virtaddr {}", machine.sim_cycle, (void*)physaddr,
-                         (void*)origaddr);
+        machine.logger.println("[cycle {}] load from physaddr {} for virtaddr {}", machine.sim_cycle, (void*)physaddr,
+                               (void*)origaddr);
         data = loadphys(physaddr);
       }
     }
@@ -1004,32 +1012,33 @@ struct SequentialCore {
     int assistid = ctx.commitarf[REG_rip];
     assist_func_t assist = (assist_func_t)(Waddr)assistid_to_func[assistid];
 
-    logging::println(
+    machine.logger.println(
         logging::DEBUG, "[vcpu {}] Barrier (#{} -> {} {}) called from {}; return to {}) at {} cycles, {} commits",
         ctx.vcpuid, assistid, (void*)assist, assist_name(assist), (RIPVirtPhys(ctx.commitarf[REG_selfrip]).update(ctx)),
         (void*)(Waddr)ctx.commitarf[REG_nextrip], machine.sim_cycle, machine.total_user_insns_committed);
-    logging::flush();
+    machine.logger.flush();
 
-    logging::println(logging::TRACE, "Calling assist function at {}...", (void*)assist);
-    logging::flush();
+    machine.logger.println(logging::TRACE, "Calling assist function at {}...", (void*)assist);
+    machine.logger.flush();
 
     update_assist_stats(assist);
-    logging::println(logging::TRACE, "Before assist:");
-    logging::println(logging::TRACE, "{}", ctx);
+    machine.logger.println(logging::TRACE, "Before assist:");
+    machine.logger.println(logging::TRACE, "{}", ctx);
 
     requested_switch_to_native = false;
     assist(ctx);
     const bool switch_to_native = requested_switch_to_native;
     requested_switch_to_native = false;
 
-    logging::println(logging::TRACE, "Done with assist");
-    logging::println(logging::TRACE, "New state:");
-    logging::println(logging::TRACE, "{}", ctx);
+    machine.logger.println(logging::TRACE, "Done with assist");
+    machine.logger.println(logging::TRACE, "New state:");
+    machine.logger.println(logging::TRACE, "{}", ctx);
 
     reset_fetch(ctx.commitarf[REG_rip]);
     external_to_core_state(ctx);
     if (switch_to_native) {
-      logging::println("PTL call requested switch to native mode at rip {}", (void*)(Waddr)ctx.commitarf[REG_rip]);
+      machine.logger.println("PTL call requested switch to native mode at rip {}",
+                             (void*)(Waddr)ctx.commitarf[REG_rip]);
       return false;
     }
     return true;
@@ -1038,9 +1047,9 @@ struct SequentialCore {
   bool handle_exception() {
     core_to_external_state(ctx);
 
-    logging::println(logging::INFO, "PTL Exception {} called from rip {} at {} cycles, {} commits", ctx.exception,
-                     (void*)(Waddr)ctx.commitarf[REG_rip], machine.sim_cycle, machine.total_user_insns_committed);
-    logging::flush();
+    machine.logger.println(logging::INFO, "PTL Exception {} called from rip {} at {} cycles, {} commits", ctx.exception,
+                           (void*)(Waddr)ctx.commitarf[REG_rip], machine.sim_cycle, machine.total_user_insns_committed);
+    machine.logger.flush();
 
     //
     // Map PTL internal hardware exceptions to their x86 equivalents,
@@ -1060,15 +1069,15 @@ struct SequentialCore {
       ctx.x86_exception = EXCEPTION_x86_fpu;
       break;
     default:
-      logging::println("Unsupported internal exception type {}", ctx.exception);
-      logging::flush();
+      machine.logger.println("Unsupported internal exception type {}", ctx.exception);
+      machine.logger.flush();
       assert(false);
     }
 
     if unlikely ((ctx.x86_exception == EXCEPTION_x86_page_fault) && (ctx.cr2 == 0xffffffff00000018)) {
       eventlog.print();
     }
-    logging::println(logging::DEBUG, "{}", ctx);
+    machine.logger.println(logging::DEBUG, "{}", ctx);
 
     ctx.propagate_x86_exception(ctx.x86_exception, ctx.error_code, ctx.cr2);
 
@@ -1122,8 +1131,8 @@ struct SequentialCore {
 
     bool barrier = 0;
 
-    logging::println(logging::DEBUG, "[vcpu {}] Sequentially executing basic block {} ({} uops), insn limit {}",
-                     ctx.vcpuid, W64(bb->rip), bb->count, insnlimit);
+    machine.logger.println(logging::DEBUG, "[vcpu {}] Sequentially executing basic block {} ({} uops), insn limit {}",
+                           ctx.vcpuid, W64(bb->rip), bb->count, insnlimit);
 
     if unlikely (config.log.event_log_enabled) {
       TransOp dummyuop;
@@ -1167,7 +1176,7 @@ struct SequentialCore {
 
       if unlikely (arf[REG_rip] == config.log.start_log_at_rip) {
         config.log.start_log_at_iteration = 0;
-        logenable = 1;
+        machine.logger.set_enabled(true);
       }
 
       if likely (!unaligned_ldst_buf.get(uop, synthop)) {
@@ -1202,7 +1211,7 @@ struct SequentialCore {
       //
       AddressSpace& asp = *ctx.address_space;
       if unlikely (asp.isdirty(rvp.mfnlo) | (asp.isdirty(rvp.mfnhi))) {
-        logging::println("Self-modifying code at rip {} detected: mfn was dirty (invalidate and retry)", rvp);
+        machine.logger.println("Self-modifying code at rip {} detected: mfn was dirty (invalidate and retry)", rvp);
         machine.bbcache->invalidate_page(asp, rvp.mfnlo, INVALIDATE_REASON_SMC);
         if (rvp.mfnlo != rvp.mfnhi)
           machine.bbcache->invalidate_page(asp, rvp.mfnhi, INVALIDATE_REASON_SMC);
@@ -1235,7 +1244,8 @@ struct SequentialCore {
                              .rbflags = rbflags,
                              .rcflags = rcflags,
                              .riptaken = uop.riptaken,
-                             .ripseq = uop.ripseq};
+                             .ripseq = uop.ripseq,
+                             .logger = &machine.logger};
 
       bool ld = isload(uop.opcode);
       bool st = isstore(uop.opcode);
@@ -1297,8 +1307,8 @@ struct SequentialCore {
             event->alignfixup.uopindex = uopindex;
           }
           uop.unaligned = 1;
-          logging::println(logging::INFO, "{:20} fetch  rip {}: split unaligned load or store {}", "",
-                           (void*)(Waddr)arf[REG_rip], uop);
+          machine.logger.println(logging::INFO, "{:20} fetch  rip {}: split unaligned load or store {}", "",
+                                 (void*)(Waddr)arf[REG_rip], uop);
           split_unaligned(uop, unaligned_ldst_buf);
           continue;
         }
@@ -1404,11 +1414,11 @@ struct SequentialCore {
       barrier = isclass(uop.opcode, OPCLASS_BARRIER);
 
       if unlikely ((arf[REG_rip] == config.log.log_backwards_from_trigger_rip) && (config.log.event_log_enabled)) {
-        logging::println("Hit trigger rip {}; printing event ring buffer:",
-                         (void*)(Waddr)config.log.log_backwards_from_trigger_rip);
-        logging::flush();
+        machine.logger.println("Hit trigger rip {}; printing event ring buffer:",
+                               (void*)(Waddr)config.log.log_backwards_from_trigger_rip);
+        machine.logger.flush();
         eventlog.print();
-        logging::println("End of triggered event dump");
+        machine.logger.println("End of triggered event dump");
       }
 
       if likely (uop.eom) {
@@ -1446,8 +1456,8 @@ struct SequentialCore {
 
       if unlikely (br) {
         core_to_external_state(ctx);
-        logging::println(logging::VERBOSE, "Core State after branch:");
-        logging::println(logging::VERBOSE, "{}", ctx);
+        machine.logger.println(logging::VERBOSE, "Core State after branch:");
+        machine.logger.println(logging::VERBOSE, "{}", ctx);
       }
     }
 
@@ -1514,9 +1524,9 @@ void SequentialMachine::flush_tlb_virt(Context& ctx, Waddr virtaddr) {}
 int SequentialMachine::run() {
   eventlog.machine = this;
 
-  logging::println("Starting sequential core toplevel loop at {} cycles and {} commits", sim_cycle,
-                   total_user_insns_committed);
-  logging::flush();
+  logger.println("Starting sequential core toplevel loop at {} cycles and {} commits", sim_cycle,
+                 total_user_insns_committed);
+  logger.flush();
 
   if unlikely (config.log.event_log_enabled && (!eventlog.start)) {
     eventlog.init(config.log.event_log_ring_buffer_size);
@@ -1530,17 +1540,17 @@ int SequentialMachine::run() {
   seq.runnable = true;
   seq.external_to_core_state(ctx);
 
-  logging::println("Initial state:");
-  logging::println("{}", ctx);
+  logger.println("Initial state:");
+  logger.println("{}", ctx);
 
   bool exiting = false;
 
-  logging::println(logging::INFO, "Current logenable = {}, start_log_at_iteration = {}, loglevel {}", logenable,
-                   config.log.start_log_at_iteration, config.log.loglevel);
+  logger.println(logging::INFO, "Current logenable = {}, start_log_at_iteration = {}, loglevel {}", logger.enabled(),
+                 config.log.start_log_at_iteration, config.log.loglevel);
 
   for (;;) {
     if unlikely (iterations >= config.log.start_log_at_iteration)
-      logenable = 1;
+      logger.set_enabled(true);
 
     int running_thread_count = 0;
     if (seq.runnable) {
@@ -1565,20 +1575,20 @@ int SequentialMachine::run() {
       break;
   }
 
-  logging::println(logging::INFO, "Exiting sequential mode at {} commits, {} uops and {} iterations (cycles)",
-                   total_user_insns_committed, total_uops_committed, iterations);
+  logger.println(logging::INFO, "Exiting sequential mode at {} commits, {} uops and {} iterations (cycles)",
+                 total_user_insns_committed, total_uops_committed, iterations);
 
   seq.core_to_external_state(ctx);
   *state = ctx.to_cpu_state();
 
-  logging::println(logging::VERBOSE, "Core State at end:");
-  logging::println(logging::VERBOSE, "{}", ctx);
+  logger.println(logging::VERBOSE, "Core State at end:");
+  logger.println(logging::VERBOSE, "{}", ctx);
 
   return exiting;
 }
 
 void SequentialMachine::dump_state() {
-  logging::println("Dumping event log for sequential core:");
+  logger.println("Dumping event log for sequential core:");
   eventlog.print();
 
   core->print_state();

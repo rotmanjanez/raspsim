@@ -52,7 +52,8 @@ void assist_cpuid(Context& ctx) {
 
   W32 func = rax;
   W32 subfunc = rcx;
-  logging::println("assist_cpuid: func 0x{:08x} called from {}:", func, (void*)(Waddr)ctx.commitarf[REG_selfrip]);
+  ctx.machine_impl->logger.println("assist_cpuid: func 0x{:08x} called from {}:", func,
+                                   (void*)(Waddr)ctx.commitarf[REG_selfrip]);
 
   CpuidResult result = handle_cpuid(ctx, func, subfunc);
   rax = result.eax;

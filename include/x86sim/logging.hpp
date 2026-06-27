@@ -11,8 +11,6 @@
 #include <filesystem>
 
 namespace x86sim {
-// Global enable flag for backward compatibility
-extern bool logenable;
 
 namespace logging {
 
@@ -135,15 +133,18 @@ public:
   void flush();
 };
 
-// Singleton Logger - manages sink and level checking
+// Per-instance Logger - manages sink, level and enable state.
+//
+// Each Machine/MachineImpl owns its own Logger so independent simulator
+// instances (potentially running concurrently on different threads) keep fully
+// isolated logging: separate output file, level threshold, and enable flag.
 class Logger {
 private:
   friend class log_output_iterator;
 
   std::unique_ptr<LogSink> sink_;
   int current_level_;
-
-  Logger() : sink_(std::make_unique<FileLogSink>(stderr)), current_level_(static_cast<int>(INFO)) {}
+  bool enabled_;
 
   void write_to_sink(Level level, const std::string& message) {
     if (sink_) {
@@ -158,11 +159,9 @@ private:
   }
 
 public:
-  static Logger& instance() {
-    static Logger logger;
-    return logger;
-  }
+  Logger() : sink_(std::make_unique<FileLogSink>(stderr)), current_level_(static_cast<int>(INFO)), enabled_(false) {}
 
+  // Owns a unique_ptr sink; not copyable. Constructed in place by its owner.
   Logger(const Logger&) = delete;
   Logger& operator=(const Logger&) = delete;
 
@@ -171,6 +170,9 @@ public:
   void set_level(Level level) { current_level_ = static_cast<int>(level); }
 
   void set_level(int level) { current_level_ = level; }
+
+  bool enabled() const { return enabled_; }
+  void set_enabled(bool enabled) { enabled_ = enabled; }
 
   void set_sink(std::unique_ptr<LogSink> sink) {
     if (sink) {
@@ -187,6 +189,39 @@ public:
 
   // Explicit flush
   void flush() { flush_sink(); }
+
+  // Fast inline level check - NO virtual call on hot path
+  bool logable_at(Level level) const { return enabled_ && (static_cast<int>(level) >= current_level_); }
+
+  // Format and emit a message without a trailing newline.
+  template<typename... Args>
+  void print(Level lvl, std::format_string<Args...> fmt, Args&&... args) {
+    if (logable_at(lvl)) {
+      auto out = output(lvl);
+      std::format_to(out, fmt, std::forward<Args>(args)...);
+    }
+  }
+
+  // Format and emit a message followed by a newline.
+  template<typename... Args>
+  void println(Level lvl, std::format_string<Args...> fmt, Args&&... args) {
+    if (logable_at(lvl)) {
+      auto out = output(lvl);
+      std::format_to(out, fmt, std::forward<Args>(args)...);
+      std::format_to(out, "\n");
+    }
+  }
+
+  // Default to INFO level
+  template<typename... Args>
+  void print(std::format_string<Args...> fmt, Args&&... args) {
+    print(INFO, fmt, std::forward<Args>(args)...);
+  }
+
+  template<typename... Args>
+  void println(std::format_string<Args...> fmt, Args&&... args) {
+    println(INFO, fmt, std::forward<Args>(args)...);
+  }
 };
 
 // Define buffer_state destructor after Logger is complete
@@ -204,69 +239,9 @@ inline void log_output_iterator::flush() {
   }
 }
 
-// Fast inline level check - NO virtual call on hot path
-inline bool logable_at(Level level) {
-  return logenable && (static_cast<int>(level) >= Logger::instance().current_level());
-}
-
-// Convenience function: get output iterator for formatting
-inline log_output_iterator output(Level level) {
-  return Logger::instance().output(level);
-}
-
-// Templated print functions for easy migration from old API
-template<typename... Args>
-inline void print(Level lvl, std::format_string<Args...> fmt, Args&&... args) {
-  if (logable_at(lvl)) {
-    auto out = output(lvl);
-    std::format_to(out, fmt, std::forward<Args>(args)...);
-  }
-}
-
-template<typename... Args>
-inline void println(Level lvl, std::format_string<Args...> fmt, Args&&... args) {
-  if (logable_at(lvl)) {
-    auto out = output(lvl);
-    std::format_to(out, fmt, std::forward<Args>(args)...);
-    std::format_to(out, "\n");
-  }
-}
-
-// Default to INFO level
-template<typename... Args>
-inline void print(std::format_string<Args...> fmt, Args&&... args) {
-  print(INFO, fmt, std::forward<Args>(args)...);
-}
-
-template<typename... Args>
-inline void println(std::format_string<Args...> fmt, Args&&... args) {
-  println(INFO, fmt, std::forward<Args>(args)...);
-}
-
-// Flush output
-inline void flush() {
-  Logger::instance().flush();
-}
-
-// Convenience functions for API compatibility
-inline void set_level(Level level) {
-  Logger::instance().set_level(level);
-}
-
-inline void set_level(int level) {
-  Logger::instance().set_level(level);
-}
-
-inline void set_file_sink(const std::filesystem::path& filename) {
-  Logger::instance().set_file_sink(filename);
-}
-inline void set_file_sink(const char* filename) {
-  Logger::instance().set_file_sink(filename);
-}
-inline void set_file_sink(FILE* fp, bool owns_file = false) {
-  Logger::instance().set_file_sink(fp, owns_file);
-}
-
+// stderr/stdout helpers: these write directly to the standard streams and hold
+// no shared state, so they remain free functions usable from contexts with no
+// Logger instance (CLI errors, fatal asserts, build-time diagnostics).
 template<typename... Args>
 inline void eprint(std::format_string<Args...> fmt, Args&&... args) {
   std::print(stderr, fmt, std::forward<Args>(args)...);

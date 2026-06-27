@@ -187,23 +187,23 @@ void OutOfOrderCore::init_generic() {
 }
 
 template<typename T>
-static void print_list_of_state_lists(const ListOfStateLists& lol, const char* title) {
-  logging::println("{}:", title);
+static void print_list_of_state_lists(logging::Logger& logger, const ListOfStateLists& lol, const char* title) {
+  logger.println("{}:", title);
   foreach (i, lol.count) {
     StateList& list = *lol[i];
-    logging::println("{} ({} entries):", list.name, list.count);
+    logger.println("{} ({} entries):", list.name, list.count);
     int n = 0;
     T* obj;
     foreach_list_mutable(list, obj, entry, nextentry) {
       if ((n % 16) == 0)
-        logging::print(" ");
-      logging::print(" {:<3}", obj->index());
+        logger.print(" ");
+      logger.print(" {:<3}", obj->index());
       if (((n % 16) == 15) || (n == list.count - 1))
-        logging::println("");
+        logger.println("");
       n++;
     }
     assert(n == list.count);
-    logging::println("");
+    logger.println("");
     // list.validate();
   }
 }
@@ -450,8 +450,8 @@ bool OutOfOrderCore::runcycle() {
   // Flush event log ring buffer
   //
   if unlikely (config.log.event_log_enabled) {
-    logging::println(logging::INFO, "[cycle {}] Miss buffer contents:", machine.sim_cycle);
-    logging::println(logging::INFO, "{}", caches.missbuf);
+    machine.logger.println(logging::INFO, "[cycle {}] Miss buffer contents:", machine.sim_cycle);
+    machine.logger.println(logging::INFO, "{}", caches.missbuf);
     if unlikely (config.log.flush_event_log_every_cycle) {
       eventlog.flush(true);
     }
@@ -472,10 +472,10 @@ bool OutOfOrderCore::runcycle() {
 
     switch (rc) {
     case COMMIT_RESULT_SMC: {
-      logging::println(logging::INFO,
-                       "Potentially cross-modifying SMC detected: global flush required (cycle {}, {} commits)",
-                       machine.sim_cycle, machine.total_user_insns_committed);
-      logging::flush();
+      machine.logger.println(logging::INFO,
+                             "Potentially cross-modifying SMC detected: global flush required (cycle {}, {} commits)",
+                             machine.sim_cycle, machine.total_user_insns_committed);
+      machine.logger.flush();
       //
       // DO NOT GLOBALLY FLUSH! It will cut off the other thread(s) in the
       // middle of their currently committing x86 instruction, causing massive
@@ -498,12 +498,14 @@ bool OutOfOrderCore::runcycle() {
         if unlikely (!t)
           continue;
 
-        logging::println(logging::DEBUG, "[vcpu {}] current_basic_block = {}: ", i, (void*)t->current_basic_block);
+        machine.logger.println(logging::DEBUG, "[vcpu {}] current_basic_block = {}: ", i,
+                               (void*)t->current_basic_block);
         if (t->current_basic_block)
-          logging::println(logging::DEBUG, "  [vcpu {}] current_basic_block = {}: {}", i, (void*)t->current_basic_block,
-                           (void*)(W64)t->current_basic_block->rip);
+          machine.logger.println(logging::DEBUG, "  [vcpu {}] current_basic_block = {}: {}", i,
+                                 (void*)t->current_basic_block, (void*)(W64)t->current_basic_block->rip);
         else
-          logging::println(logging::DEBUG, "  [vcpu {}] current_basic_block = {}", i, (void*)t->current_basic_block);
+          machine.logger.println(logging::DEBUG, "  [vcpu {}] current_basic_block = {}", i,
+                                 (void*)t->current_basic_block);
       }
 
       thread->flush_pipeline();
@@ -538,12 +540,12 @@ bool OutOfOrderCore::runcycle() {
       break;
 
     if unlikely ((machine.sim_cycle - thread->last_commit_at_cycle) > 4096) {
-      logging::println(logging::ERROR,
-                       "[vcpu {}] thread {}: WARNING: At cycle {}, {} user commits: no instructions have "
-                       "committed for {} cycles; the pipeline could be deadlocked",
-                       thread->ctx.vcpuid, thread->threadid, machine.sim_cycle, machine.total_user_insns_committed,
-                       (machine.sim_cycle - thread->last_commit_at_cycle));
-      logging::flush();
+      machine.logger.println(logging::ERROR,
+                             "[vcpu {}] thread {}: WARNING: At cycle {}, {} user commits: no instructions have "
+                             "committed for {} cycles; the pipeline could be deadlocked",
+                             thread->ctx.vcpuid, thread->threadid, machine.sim_cycle,
+                             machine.total_user_insns_committed, (machine.sim_cycle - thread->last_commit_at_cycle));
+      machine.logger.flush();
       exiting = 1;
     }
   }
@@ -660,27 +662,28 @@ ThreadContext& ReorderBufferEntry::getthread() const {
 
 issueq_tag_t ReorderBufferEntry::get_tag() {
   int mask = ((1 << MAX_THREADS_BIT) - 1) << MAX_ROB_IDX_BIT;
-  logging::println(logging::VERBOSE, " get_tag() thread {} rob idx {} mask 0x{:x}", threadid, idx, mask);
+  getcore().machine.logger.println(logging::VERBOSE, " get_tag() thread {} rob idx {} mask 0x{:x}", threadid, idx,
+                                   mask);
 
   assert(!(idx & mask));
   assert(!(threadid >> MAX_THREADS_BIT));
   //  int threadid = 1;
   issueq_tag_t rc = (idx | (threadid << MAX_ROB_IDX_BIT));
-  logging::println(logging::VERBOSE, " tag 0x{:x}", rc);
+  getcore().machine.logger.println(logging::VERBOSE, " tag 0x{:x}", rc);
   return rc;
 }
 
 
 void OutOfOrderCore::print_smt_state() {
-  logging::println("Print SMT statistics:");
+  getcore().machine.logger.println("Print SMT statistics:");
 
   foreach (i, threadcount) {
     auto& thread = threads[i];
-    logging::println("Thread {}:", i);
-    logging::println("  total_uops_committed {}", thread->total_uops_committed);
-    logging::println("  uipc {}", double(thread->total_uops_committed) / double(machine.iterations));
-    logging::println("  total_insns_committed {}", thread->total_insns_committed);
-    logging::println("  ipc {}", double(thread->total_insns_committed) / double(machine.iterations));
+    getcore().machine.logger.println("Thread {}:", i);
+    getcore().machine.logger.println("  total_uops_committed {}", thread->total_uops_committed);
+    machine.logger.println("  uipc {}", double(thread->total_uops_committed) / double(machine.iterations));
+    machine.logger.println("  total_insns_committed {}", thread->total_insns_committed);
+    machine.logger.println("  ipc {}", double(thread->total_insns_committed) / double(machine.iterations));
   }
 }
 
@@ -769,22 +772,22 @@ void OutOfOrderCore::check_refcounts() {
     PhysicalRegisterFile& physregs = physregfiles[rfid];
     foreach (i, physregs.size) {
       if unlikely (physregs[i].refcount != refcounts[rfid][i]) {
-        logging::println(logging::ERROR, "ERROR: r{} refcount is {} but should be {}", i, physregs[i].refcount,
-                         refcounts[rfid][i]);
+        machine.logger.println(logging::ERROR, "ERROR: r{} refcount is {} but should be {}", i, physregs[i].refcount,
+                               refcounts[rfid][i]);
 
         foreach_forward(ROB, r) {
           ReorderBufferEntry& rob = ROB[r];
           foreach (j, MAX_OPERANDS) {
             if ((rob.operands[j]->index() == i) & (rob.operands[j]->rfid == rfid))
-              logging::println(logging::ERROR, "  ROB {} operand {}", r, j);
+              machine.logger.println(logging::ERROR, "  ROB {} operand {}", r, j);
           }
         }
 
         foreach (j, TRANSREG_COUNT) {
           if ((commitrrt[j]->index() == i) & (commitrrt[j]->rfid == rfid))
-            logging::println(logging::ERROR, "  CommitRRT {}", arch_reg_names[j]);
+            machine.logger.println(logging::ERROR, "  CommitRRT {}", arch_reg_names[j]);
           if ((specrrt[j]->index() == i) & (specrrt[j]->rfid == rfid))
-            logging::println(logging::ERROR, "  SpecRRT {}", arch_reg_names[j]);
+            machine.logger.println(logging::ERROR, "  SpecRRT {}", arch_reg_names[j]);
         }
 
         errors = 1;
@@ -818,9 +821,9 @@ void OutOfOrderCore::check_rob() {
         assert(inrange(rob->index(), 0, ROB_SIZE - 1));
         assert(rob->current_state_list == &list);
         if (!((rob->current_state_list != &thread->rob_free_list) ? rob->entry_valid : (!rob->entry_valid))) {
-          logging::println(logging::ERROR, "ROB {} list = {} entry_valid {}", rob->index(),
-                           rob->current_state_list->name, static_cast<int>(rob->entry_valid));
-          logging::flush();
+          machine.logger.println(logging::ERROR, "ROB {} list = {} entry_valid {}", rob->index(),
+                                 rob->current_state_list->name, static_cast<int>(rob->entry_valid));
+          machine.logger.flush();
           dump_smt_state();
           assert(false);
         }
@@ -844,34 +847,34 @@ bool ThreadContext::handle_barrier() {
   int assistid = ctx.commitarf[REG_rip];
   assist_func_t assist = (assist_func_t)(Waddr)assistid_to_func[assistid];
 
-  logging::println(
+  core.machine.logger.println(
       logging::INFO, "[vcpu {}] Barrier (#{} -> {} {} called from {}; return to {}) at {} cycles, {} commits",
       ctx.vcpuid, assistid, (void*)assist, assist_name(assist), RIPVirtPhys(ctx.commitarf[REG_selfrip]).update(ctx),
       (void*)(Waddr)ctx.commitarf[REG_nextrip], core.machine.sim_cycle, core.machine.total_user_insns_committed);
-  logging::flush();
+  core.machine.logger.flush();
 
-  logging::println(logging::DEBUG, "Calling assist function at {}...", (void*)assist);
-  logging::flush();
+  core.machine.logger.println(logging::DEBUG, "Calling assist function at {}...", (void*)assist);
+  core.machine.logger.flush();
 
   update_assist_stats(assist);
-  logging::println(logging::DEBUG, "Before assist:");
-  logging::println(logging::DEBUG, "{}", ctx);
+  core.machine.logger.println(logging::DEBUG, "Before assist:");
+  core.machine.logger.println(logging::DEBUG, "{}", ctx);
 
   requested_switch_to_native = false;
   assist(ctx);
   const bool switch_to_native = requested_switch_to_native;
   requested_switch_to_native = false;
 
-  logging::println(logging::DEBUG, "Done with assist");
-  logging::println(logging::DEBUG, "New state:");
-  logging::println(logging::DEBUG, "{}", ctx);
+  core.machine.logger.println(logging::DEBUG, "Done with assist");
+  core.machine.logger.println(logging::DEBUG, "New state:");
+  core.machine.logger.println(logging::DEBUG, "{}", ctx);
 
   // Flush again, but restart at possibly modified rip
   flush_pipeline();
 
   if (switch_to_native) {
-    logging::println(logging::INFO, "PTL call requested switch to native mode at rip {}",
-                     (void*)(Waddr)ctx.commitarf[REG_rip]);
+    core.machine.logger.println(logging::INFO, "PTL call requested switch to native mode at rip {}",
+                                (void*)(Waddr)ctx.commitarf[REG_rip]);
     return false;
   }
   return true;
@@ -882,10 +885,10 @@ bool ThreadContext::handle_exception() {
   core_to_external_state();
   flush_pipeline();
 
-  logging::println(logging::INFO, "[vcpu {}] Exception {} called from rip {} at {} cycles, {} commits", ctx.vcpuid,
-                   ctx.exception, (void*)(Waddr)ctx.commitarf[REG_rip], core.machine.sim_cycle,
-                   core.machine.total_user_insns_committed);
-  logging::flush();
+  core.machine.logger.println(logging::INFO, "[vcpu {}] Exception {} called from rip {} at {} cycles, {} commits",
+                              ctx.vcpuid, ctx.exception, (void*)(Waddr)ctx.commitarf[REG_rip], core.machine.sim_cycle,
+                              core.machine.total_user_insns_committed);
+  core.machine.logger.flush();
 
   //
   // CheckFailed and SkipBlock exceptions are raised by the chk uop.
@@ -907,9 +910,9 @@ bool ThreadContext::handle_exception() {
   //
   if (ctx.exception == EXCEPTION_SkipBlock) {
     ctx.commitarf[REG_rip] = chk_recovery_rip;
-    logging::println(logging::DEBUG, "SkipBlock pseudo-exception: skipping to {}",
-                     (void*)(Waddr)ctx.commitarf[REG_rip]);
-    logging::flush();
+    core.machine.logger.println(logging::DEBUG, "SkipBlock pseudo-exception: skipping to {}",
+                                (void*)(Waddr)ctx.commitarf[REG_rip]);
+    core.machine.logger.flush();
     flush_pipeline();
     return true;
   }
@@ -941,12 +944,13 @@ bool ThreadContext::handle_exception() {
     ctx.x86_exception = EXCEPTION_x86_gp_fault;
     break;
   default:
-    logging::println(logging::ERROR, "Unsupported internal exception type {}", static_cast<int>(ctx.exception));
-    logging::flush();
+    core.machine.logger.println(logging::ERROR, "Unsupported internal exception type {}",
+                                static_cast<int>(ctx.exception));
+    core.machine.logger.flush();
     assert(false);
   }
 
-  logging::println(logging::INFO, "{}", ctx);
+  core.machine.logger.println(logging::INFO, "{}", ctx);
 
   ctx.propagate_x86_exception(ctx.x86_exception, ctx.error_code, ctx.cr2);
 
@@ -1017,7 +1021,7 @@ void EventLog::print(bool only_to_tail) {
   size_t bufsize = end - start;
 
   if (!config.log.flush_event_log_every_cycle)
-    logging::println(logging::INFO, "#-------- Start of event log --------");
+    machine.logger.println(logging::INFO, "#-------- Start of event log --------");
 
   foreach (i, (only_to_tail ? (tail - start) : bufsize)) {
     if unlikely (p >= end)
@@ -1031,15 +1035,15 @@ void EventLog::print(bool only_to_tail) {
 
     if unlikely (p->cycle != cycle) {
       cycle = p->cycle;
-      logging::println(logging::INFO, "Cycle {}:", cycle);
+      machine.logger.println(logging::INFO, "Cycle {}:", cycle);
     }
 
-    logging::print(logging::INFO, "{}", *p);
+    machine.logger.print(logging::INFO, "{}", *p);
     p++;
   }
 
   if (!config.log.flush_event_log_every_cycle)
-    logging::println(logging::INFO, "#-------- End of event log --------");
+    machine.logger.println(logging::INFO, "#-------- End of event log --------");
 }
 
 } // namespace x86sim
@@ -1714,17 +1718,17 @@ const Context& OutOfOrderMachine::cpu_context() const {
 // is hit (as configured elsewhere in config).
 //
 int OutOfOrderMachine::run() {
-  logging::println("Starting out-of-order core toplevel loop");
-  logging::flush();
+  logger.println("Starting out-of-order core toplevel loop");
+  logger.flush();
 
   // All VCPUs are running:
   stopped = 0;
 
   if unlikely (this->iterations >= config.log.start_log_at_iteration) {
-    logging::println("Start logging at level {} in cycle {}", config.log.loglevel, this->iterations);
-    logging::flush();
+    logger.println("Start logging at level {} in cycle {}", config.log.loglevel, this->iterations);
+    logger.flush();
 
-    logenable = 1;
+    logger.set_enabled(true);
   }
 
   // Bind the caller's state/space into the single thread context. The pipeline
@@ -1740,7 +1744,7 @@ int OutOfOrderMachine::run() {
   cores[0]->reset();
   cores[0]->flush_pipeline_all();
 
-  logging::println("IssueQueue states:");
+  logger.println("IssueQueue states:");
 
   if unlikely (config.log.event_log_enabled && (!cores[0]->eventlog.start)) {
     cores[0]->eventlog.init(config.log.event_log_ring_buffer_size);
@@ -1751,11 +1755,11 @@ int OutOfOrderMachine::run() {
 
   for (;;) {
     if unlikely (this->iterations >= config.log.start_log_at_iteration) {
-      if unlikely (!logenable) {
-        logging::println("Start logging at level {} in cycle {}", config.log.loglevel, this->iterations);
-        logging::flush();
+      if unlikely (!logger.enabled()) {
+        logger.println("Start logging at level {} in cycle {}", config.log.loglevel, this->iterations);
+        logger.flush();
       }
-      logenable = 1;
+      logger.set_enabled(true);
     }
 
     OutOfOrderCore& core = *cores[0]; // only one core for now
@@ -1769,14 +1773,14 @@ int OutOfOrderMachine::run() {
     if unlikely (((this->iterations >= config.stop_at_iteration ||
                    this->total_user_insns_committed >= config.stop_at_user_insns) &&
                   (!stopping))) {
-      logging::println("Waiting for all VCPUs to reach stopping point, starting at cycle {}", this->sim_cycle);
+      logger.println("Waiting for all VCPUs to reach stopping point, starting at cycle {}", this->sim_cycle);
       // force_logging_enabled();
       OutOfOrderCore& core = *cores[0];
       foreach (i, core.threadcount)
         core.threads[i]->stop_at_next_eom = 1;
       if (config.debug.abort_at_end) {
         config.debug.abort_at_end = 0;
-        logging::println("Abort immediately: do not wait for next x86 boundary nor flush pipelines");
+        logger.println("Abort immediately: do not wait for next x86 boundary nor flush pipelines");
         stopped = 1;
         exiting = 1;
       }
@@ -1790,8 +1794,8 @@ int OutOfOrderMachine::run() {
     this->iterations++;
 
     if unlikely (stopping) {
-      logging::println(logging::TRACE, "Waiting for all VCPUs to stop at {}: mask = {} (need {} VCPUs)",
-                       this->sim_cycle, stopped.to_string(), contextcount);
+      logger.println(logging::TRACE, "Waiting for all VCPUs to stop at {}: mask = {} (need {} VCPUs)", this->sim_cycle,
+                     stopped.to_string(), contextcount);
       exiting |= (stopped.count() == contextcount);
     }
 
@@ -1799,8 +1803,8 @@ int OutOfOrderMachine::run() {
       break;
   }
 
-  logging::println("Exiting out-of-order core at {} commits, {} uops and {} iterations (cycles)",
-                   this->total_user_insns_committed, this->total_uops_committed, this->iterations);
+  logger.println("Exiting out-of-order core at {} commits, {} uops and {} iterations (cycles)",
+                 this->total_user_insns_committed, this->total_uops_committed, this->iterations);
 
   OutOfOrderCore& core = *cores[0]; /// only one core for now.
 
@@ -1810,8 +1814,8 @@ int OutOfOrderMachine::run() {
     thread->core_to_external_state();
 
     if (((this->sim_cycle - thread->last_commit_at_cycle) > 1024) | config.debug.dump_state_now) {
-      logging::println(logging::TRACE, "Core State at end for thread {}:", thread->threadid);
-      logging::println(logging::TRACE, "{}", thread->ctx);
+      logger.println(logging::TRACE, "Core State at end for thread {}:", thread->threadid);
+      logger.println(logging::TRACE, "{}", thread->ctx);
     }
   }
 
@@ -1831,14 +1835,14 @@ int OutOfOrderMachine::run() {
 void OutOfOrderCore::flush_tlb(Context& ctx, int threadid, bool selective, Waddr virtaddr) {
   ThreadContext& thread = *threads[threadid];
 
-  logging::print(logging::DEBUG, "[vcpu {}] core {}, thread {}: Flush TLBs", ctx.vcpuid, coreid, threadid);
+  machine.logger.print(logging::DEBUG, "[vcpu {}] core {}, thread {}: Flush TLBs", ctx.vcpuid, coreid, threadid);
   if (selective)
-    logging::println(logging::DEBUG, " for virtaddr {}", (void*)virtaddr);
-  logging::println(logging::DEBUG, "");
-  logging::println(logging::TRACE, "DTLB before:");
-  logging::println(logging::TRACE, "{}", caches.dtlb);
-  logging::println(logging::TRACE, "ITLB before:");
-  logging::println(logging::TRACE, "{}", caches.itlb);
+    machine.logger.println(logging::DEBUG, " for virtaddr {}", (void*)virtaddr);
+  machine.logger.println(logging::DEBUG, "");
+  machine.logger.println(logging::TRACE, "DTLB before:");
+  machine.logger.println(logging::TRACE, "{}", caches.dtlb);
+  machine.logger.println(logging::TRACE, "ITLB before:");
+  machine.logger.println(logging::TRACE, "{}", caches.itlb);
 
   int dn;
   int in;
@@ -1851,11 +1855,11 @@ void OutOfOrderCore::flush_tlb(Context& ctx, int threadid, bool selective, Waddr
     in = caches.itlb.flush_thread(threadid);
   }
 
-  logging::println(logging::DEBUG, "Flushed {} DTLB slots and {} ITLB slots", dn, in);
-  logging::println(logging::TRACE, "DTLB after:");
-  logging::println(logging::TRACE, "{}", caches.dtlb);
-  logging::println(logging::TRACE, "ITLB after:");
-  logging::println(logging::TRACE, "{}", caches.itlb);
+  machine.logger.println(logging::DEBUG, "Flushed {} DTLB slots and {} ITLB slots", dn, in);
+  machine.logger.println(logging::TRACE, "DTLB after:");
+  machine.logger.println(logging::TRACE, "{}", caches.dtlb);
+  machine.logger.println(logging::TRACE, "ITLB after:");
+  machine.logger.println(logging::TRACE, "{}", caches.itlb);
 }
 
 void OutOfOrderMachine::flush_tlb(Context& ctx) {
@@ -1873,46 +1877,45 @@ void OutOfOrderMachine::flush_tlb_virt(Context& ctx, Waddr virtaddr) {
 }
 
 void OutOfOrderMachine::dump_state() {
-  logging::println(logging::INFO, "dump_state include event if -ringbuf enabled:");
+  logger.println(logging::INFO, "dump_state include event if -ringbuf enabled:");
   foreach (i, MAX_SMT_CORES) {
-    logging::println(logging::INFO, "dump_state for core {}", i);
-    logging::flush();
+    logger.println(logging::INFO, "dump_state for core {}", i);
+    logger.flush();
     if (!cores[i])
       continue;
     OutOfOrderCore& core = *cores[i];
     if unlikely (config.log.event_log_enabled)
       core.eventlog.print();
     else
-      logging::println(logging::INFO, "config.log.event_log_enabled is not enabled: {}", config.log.event_log_enabled);
+      logger.println(logging::INFO, "config.log.event_log_enabled is not enabled: {}", config.log.event_log_enabled);
 
     core.dump_smt_state();
     core.print_smt_state();
   }
-  logging::println(logging::INFO, "Memory interlock buffer:");
-  logging::flush();
-  logging::println(logging::INFO, "{}", interlocks);
+  logger.println(logging::INFO, "Memory interlock buffer:");
+  logger.flush();
+  logger.println(logging::INFO, "{}", interlocks);
   //
   // For debugging only:
   //
   foreach (i, cores[0]->threadcount) {
     auto& thread = cores[0]->threads[i];
-    logging::println(logging::TRACE, "Thread {}:", i);
-    logging::println(logging::TRACE, "  rip:                                 {}",
-                     (void*)thread->ctx.commitarf[REG_rip]);
-    logging::println(logging::TRACE, "  consecutive_commits_inside_spinlock: {}",
-                     thread->consecutive_commits_inside_spinlock);
-    logging::println(logging::TRACE, "  State:");
-    logging::println(logging::TRACE, "{}", thread->ctx);
+    logger.println(logging::TRACE, "Thread {}:", i);
+    logger.println(logging::TRACE, "  rip:                                 {}", (void*)thread->ctx.commitarf[REG_rip]);
+    logger.println(logging::TRACE, "  consecutive_commits_inside_spinlock: {}",
+                   thread->consecutive_commits_inside_spinlock);
+    logger.println(logging::TRACE, "  State:");
+    logger.println(logging::TRACE, "{}", thread->ctx);
   }
 }
 
 // Stub implementation for dump_smt_state - prints core state using logging
 void OutOfOrderCore::dump_smt_state() {
-  logging::println(logging::INFO, "Core {} SMT state:", coreid);
+  machine.logger.println(logging::INFO, "Core {} SMT state:", coreid);
   foreach (i, threadcount) {
     if (threads[i]) {
-      logging::println(logging::INFO, "  Thread {}: ROB count {}, LSQ count {}", i, threads[i]->ROB.count,
-                       threads[i]->LSQ.count);
+      machine.logger.println(logging::INFO, "  Thread {}: ROB count {}, LSQ count {}", i, threads[i]->ROB.count,
+                             threads[i]->LSQ.count);
     }
   }
 }

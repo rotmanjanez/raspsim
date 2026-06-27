@@ -16,6 +16,7 @@
 
 #include "globals.h"
 #include "ptlhwdef.h"
+#include "x86sim/logging.hpp"
 #include "x86sim/x86sim.hpp"
 
 namespace x86sim {
@@ -72,6 +73,10 @@ struct MachineImpl {
   // from the core's dispatch path without a public Machine method.
   HostCallbacks& callbacks;
   Options config;
+  // Per-instance logger: each MachineImpl owns its own output sink, level and
+  // enable flag, so concurrent machines log in isolation. Configured from
+  // `config` in the constructor.
+  logging::Logger logger;
   std::unique_ptr<BasicBlockCache> bbcache;
 
   W64 sim_cycle = 0;
@@ -145,7 +150,7 @@ struct TransOpBuffer {
 void split_unaligned(const TransOp& transop, TransOpBuffer& buf);
 
 
-void backup_and_reopen_logfile(const Options& options);
+void backup_and_reopen_logfile(logging::Logger& logger, const Options& options);
 void shutdown_subsystems();
 
 void update_progress();
@@ -175,9 +180,8 @@ struct PTLsimStats;
 
 #define INVALIDRIP 0xffffffffffffffffULL
 
-extern bool logenable;
-void force_logging_enabled(Options& options);
-bool handle_config_change(Options& options, int argc, char** argv);
+void force_logging_enabled(logging::Logger& logger, Options& options);
+bool handle_config_change(logging::Logger& logger, Options& options, int argc, char** argv);
 
 } // namespace x86sim
 

@@ -399,7 +399,8 @@ int ReorderBufferEntry::issue() {
                                             .rbflags = rb.flags,
                                             .rcflags = rc.flags,
                                             .riptaken = uop.riptaken,
-                                            .ripseq = uop.ripseq}));
+                                            .ripseq = uop.ripseq,
+                                            .logger = &core.machine.logger}));
     }
   }
 
@@ -1324,7 +1325,7 @@ int ReorderBufferEntry::issueload(LoadStoreQueueEntry& state, Waddr& origaddr, W
 
     // Issuing more than one ld.acq on the same block is not allowed:
     if (lock) {
-      logging::println(
+      core.machine.logger.println(
           "ERROR: thread {} uuid {} over physaddr {}: lock was already acquired by vcpuid {} uuid {} rob {}",
           thread.ctx.vcpuid, uop.uuid, (void*)physaddr, lock->vcpuid, lock->uuid, lock->rob);
       assert(false);
@@ -1687,7 +1688,7 @@ void OutOfOrderCoreCacheCallbacks::dcache_wakeup(LoadStoreInfo lsi, W64 physaddr
   assert(inrange(idx, 0, ROB_SIZE - 1));
   ReorderBufferEntry& rob = thread->ROB[idx];
 
-  logging::println(logging::VERBOSE, " dcache_wakeup rob {} uuid {}", rob.index(), rob.uop.uuid);
+  core.machine.logger.println(logging::VERBOSE, " dcache_wakeup rob {} uuid {}", rob.index(), rob.uop.uuid);
   assert(rob.current_state_list == &thread->rob_cache_miss_list);
 
   rob.loadwakeup();
@@ -2093,14 +2094,14 @@ W64 ReorderBufferEntry::annul(bool keep_misspec_uop, bool return_first_annulled_
     specrrt[i]->addspecref(i, thread.threadid);
   }
 
-  logging::println(logging::INFO, "Restored SpecRRT from CommitRRT; walking forward from:\n{}", specrrt);
+  core.machine.logger.println(logging::INFO, "Restored SpecRRT from CommitRRT; walking forward from:\n{}", specrrt);
   idx = ROB.head;
   for (idx = ROB.head; idx != startidx; idx = add_index_modulo(idx, +1, ROB_SIZE)) {
     ReorderBufferEntry& rob = ROB[idx];
     rob.pseudocommit();
   }
 
-  logging::println(logging::INFO, "Recovered SpecRRT:\n{}", specrrt);
+  core.machine.logger.println(logging::INFO, "Recovered SpecRRT:\n{}", specrrt);
 
   //
   // Pass 3: For each speculative ROB, reinitialize and free speculative ROBs

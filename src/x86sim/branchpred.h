@@ -62,11 +62,14 @@ struct Options;
 
 struct BranchPredictorInterface {
   Options& config;
+  // The owning machine's logger, threaded down into the predictor implementation
+  // and return address stack so they log per-instance rather than via a global.
+  logging::Logger& logger;
 
   // Pointer to private implementation:
   BranchPredictorImplementation* impl;
 
-  explicit BranchPredictorInterface(Options& config_) : config(config_), impl(null) {}
+  BranchPredictorInterface(Options& config_, logging::Logger& logger_) : config(config_), logger(logger_), impl(null) {}
   void init();
   void reset();
   void destroy();

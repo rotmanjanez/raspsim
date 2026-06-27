@@ -70,8 +70,8 @@ int Context::copy_from_user(void* target, Waddr addr, int bytes, PageFaultErrorC
                             bool forexec, Level1PTE& ptelo, Level1PTE& ptehi) {
   assert(address_space);
   AddressSpace& asp = *address_space;
-  logging::println("VMEM: Read from user {} ({})", reinterpret_cast<void*>(addr), bytes);
-  logging::flush();
+  machine_impl->logger.println("VMEM: Read from user {} ({})", reinterpret_cast<void*>(addr), bytes);
+  machine_impl->logger.flush();
 
   int n = 0;
   pfec = 0;
@@ -95,9 +95,9 @@ int Context::copy_from_user(void* target, Waddr addr, int bytes, PageFaultErrorC
 
   void* mapped_addr = asp.page_virt_to_mapped(addr);
   assert(mapped_addr);
-  logging::println("VMEM: Read {} = {}[{:016x}]", mapped_addr, *reinterpret_cast<W8*>(mapped_addr),
-                   *reinterpret_cast<W8*>(mapped_addr));
-  logging::flush();
+  machine_impl->logger.println("VMEM: Read {} = {}[{:016x}]", mapped_addr, *reinterpret_cast<W8*>(mapped_addr),
+                               *reinterpret_cast<W8*>(mapped_addr));
+  machine_impl->logger.flush();
   std::memcpy(target, mapped_addr, n);
 
   if likely (n == bytes)
@@ -123,8 +123,8 @@ int Context::copy_from_user(void* target, Waddr addr, int bytes, PageFaultErrorC
 int Context::copy_to_user(Waddr target, void* source, int bytes, PageFaultErrorCode& pfec, Waddr& faultaddr) {
   assert(address_space);
   AddressSpace& asp = *address_space;
-  logging::println("VMEM: Write to user {} ({})", reinterpret_cast<void*>(target), bytes);
-  logging::flush();
+  machine_impl->logger.println("VMEM: Write to user {} ({})", reinterpret_cast<void*>(target), bytes);
+  machine_impl->logger.flush();
 
   pfec = 0;
   bool writable = asp.check(target, Protection::write);
@@ -240,8 +240,6 @@ void assist_ptlcall(Context& ctx) {
 Machine::Machine(HostCallbacks& callbacks, Options options) : callbacks_(callbacks), options_(std::move(options)) {
   init_uops();
 
-  handle_config_change(options_, 0, nullptr);
-
   switch (options_.core) {
   case CoreModel::sequential:
     machine_ = std::make_unique<SequentialMachine>(*this, options_);
@@ -250,6 +248,10 @@ Machine::Machine(HostCallbacks& callbacks, Options options) : callbacks_(callbac
     machine_ = std::make_unique<OutOfOrderModel::OutOfOrderMachine>(*this, options_);
     break;
   }
+
+  // Configure this machine's own logger from its options (the core owning the
+  // logger must exist first).
+  handle_config_change(machine_->logger, options_, 0, nullptr);
 }
 
 Machine::~Machine() = default;

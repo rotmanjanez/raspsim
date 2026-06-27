@@ -83,10 +83,15 @@ template<int SIZE>
 struct ReturnAddressStack : public Queue<ReturnAddressStackEntry, SIZE> {
   typedef Queue<ReturnAddressStackEntry, SIZE> base_t;
 
+  // Set by the owning CombinedPredictor; may be null before wiring.
+  logging::Logger* logger = nullptr;
+
   void push(W64 uuid, W64 rip, ReturnAddressStackEntry& old) {
-    logging::println(logging::DEBUG, "ReturnAddressStack::push(uuid {}, rip {}):", uuid, (void*)(Waddr)rip);
+    if (logger)
+      logger->println(logging::DEBUG, "ReturnAddressStack::push(uuid {}, rip {}):", uuid, (void*)(Waddr)rip);
     if (base_t::full()) {
-      logging::println(logging::DEBUG, "  Return address stack overflow: removing oldest entry to make space");
+      if (logger)
+        logger->println(logging::DEBUG, "  Return address stack overflow: removing oldest entry to make space");
       stats.ooocore.branchpred.ras.overflows++;
       base_t::pophead();
     }
@@ -95,20 +100,24 @@ struct ReturnAddressStack : public Queue<ReturnAddressStackEntry, SIZE> {
     assert(&e);
 
     old = e;
-    logging::println(logging::DEBUG, "  Old entry: {}", old);
+    if (logger)
+      logger->println(logging::DEBUG, "  Old entry: {}", old);
 
     e.uuid = uuid;
     e.rip = rip;
 
     stats.ooocore.branchpred.ras.pushes++;
-    logging::println(logging::DEBUG, "{}", *this);
+    if (logger)
+      logger->println(logging::DEBUG, "{}", *this);
   }
 
   ReturnAddressStackEntry& pop(ReturnAddressStackEntry& old) {
-    logging::println(logging::DEBUG, "ReturnAddressStack::pop():");
+    if (logger)
+      logger->println(logging::DEBUG, "ReturnAddressStack::pop():");
     if (base_t::empty()) {
       stats.ooocore.branchpred.ras.underflows++;
-      logging::println(logging::DEBUG, "  Return address stack underflow: returning entry with zero fields");
+      if (logger)
+        logger->println(logging::DEBUG, "  Return address stack underflow: returning entry with zero fields");
       old.idx = -1;
       old.uuid = 0;
       old.rip = 0;
@@ -119,8 +128,10 @@ struct ReturnAddressStack : public Queue<ReturnAddressStackEntry, SIZE> {
     assert(&e);
     old = e;
 
-    logging::println(logging::DEBUG, "  Old entry: {}", old);
-    logging::println(logging::DEBUG, "{}", *this);
+    if (logger)
+      logger->println(logging::DEBUG, "  Old entry: {}", old);
+    if (logger)
+      logger->println(logging::DEBUG, "{}", *this);
 
     stats.ooocore.branchpred.ras.pops++;
 
@@ -128,13 +139,16 @@ struct ReturnAddressStack : public Queue<ReturnAddressStackEntry, SIZE> {
   }
 
   W64 peek() {
-    logging::println(logging::DEBUG, "ReturnAddressStack::peek():");
+    if (logger)
+      logger->println(logging::DEBUG, "ReturnAddressStack::peek():");
     if (base_t::empty()) {
-      logging::println(logging::DEBUG, "  Return address stack is empty: returning bogus rip 0");
+      if (logger)
+        logger->println(logging::DEBUG, "  Return address stack is empty: returning bogus rip 0");
       return 0;
     }
 
-    logging::print(logging::INFO, "  Peeking entry {}", (*base_t::peektail()));
+    if (logger)
+      logger->print(logging::INFO, "  Peeking entry {}", (*base_t::peektail()));
 
     return base_t::peektail()->rip;
   }
@@ -143,11 +157,13 @@ struct ReturnAddressStack : public Queue<ReturnAddressStackEntry, SIZE> {
   // Pop a speculative push from the stack
   //
   void annulpush(const ReturnAddressStackEntry& old) {
-    logging::println(logging::DEBUG, "ReturnAddressStack::annulpush(old index {}, uuid {}, rip {}):", old.idx, old.uuid,
-                     (void*)(Waddr)old.rip);
+    if (logger)
+      logger->println(logging::DEBUG, "ReturnAddressStack::annulpush(old index {}, uuid {}, rip {}):", old.idx,
+                      old.uuid, (void*)(Waddr)old.rip);
 
     if (base_t::empty()) {
-      logging::println(logging::DEBUG, "  Cannot annul: return address stack is empty");
+      if (logger)
+        logger->println(logging::DEBUG, "  Cannot annul: return address stack is empty");
       return;
     }
 
@@ -157,7 +173,8 @@ struct ReturnAddressStack : public Queue<ReturnAddressStackEntry, SIZE> {
 
     ReturnAddressStackEntry dummy;
     pop(dummy);
-    logging::println(logging::DEBUG, "  Popped speculative push; e.index = {} vs tail {}", e.index(), base_t::tail);
+    if (logger)
+      logger->println(logging::DEBUG, "  Popped speculative push; e.index = {} vs tail {}", e.index(), base_t::tail);
     assert(e.index() == base_t::tail);
 
     stats.ooocore.branchpred.ras.annuls++;
@@ -167,16 +184,19 @@ struct ReturnAddressStack : public Queue<ReturnAddressStackEntry, SIZE> {
   // Push the old data back on the stack
   //
   void annulpop(const ReturnAddressStackEntry& old) {
-    logging::println(logging::DEBUG, "ReturnAddressStack::annulpop(old index {}, uuid {}, rip {}):", old.idx, old.uuid,
-                     (void*)(Waddr)old.rip);
+    if (logger)
+      logger->println(logging::DEBUG, "ReturnAddressStack::annulpop(old index {}, uuid {}, rip {}):", old.idx, old.uuid,
+                      (void*)(Waddr)old.rip);
 
     if (base_t::full()) {
-      logging::println(logging::DEBUG, "  Cannot annul: stack is full");
+      if (logger)
+        logger->println(logging::DEBUG, "  Cannot annul: stack is full");
       return;
     }
     ReturnAddressStackEntry dummy;
 
-    logging::println(logging::DEBUG, "  Pushed speculative pop; old.index = {} vs tail {}", old.index(), base_t::tail);
+    if (logger)
+      logger->println(logging::DEBUG, "  Pushed speculative pop; old.index = {} vs tail {}", old.index(), base_t::tail);
     assert(old.index() == base_t::tail);
     push(old.uuid, old.rip, dummy);
     stats.ooocore.branchpred.ras.annuls++;
@@ -197,6 +217,7 @@ template<int METASIZE, int BIMODSIZE, int L1SIZE, int L2SIZE, int SHIFTWIDTH, bo
          int RASSIZE>
 struct CombinedPredictor {
   Options& config;
+  logging::Logger& logger;
 
   TwoLevelPredictor<L1SIZE, L2SIZE, SHIFTWIDTH, HISTORYXOR> twolevel;
   BimodalPredictor<BIMODSIZE> bimodal;
@@ -205,7 +226,9 @@ struct CombinedPredictor {
   BranchTargetBuffer<BTBSETS, BTBWAYS> btb;
   ReturnAddressStack<RASSIZE> ras;
 
-  explicit CombinedPredictor(Options& config_) : config(config_) {}
+  CombinedPredictor(Options& config_, logging::Logger& logger_) : config(config_), logger(logger_) {
+    ras.logger = &logger;
+  }
 
   void reset() {
     twolevel.reset();
@@ -264,7 +287,7 @@ struct CombinedPredictor {
     // return insn.
     //
     if unlikely (type & BRANCH_HINT_RET) {
-      logging::println(logging::DEBUG, "Peeking RAS for uuid {}:", update.uuid);
+      logger.println(logging::DEBUG, "Peeking RAS for uuid {}:", update.uuid);
       return ras.peek();
     }
 
@@ -364,7 +387,7 @@ struct CombinedPredictor {
   // branch path, they must be annulled.
   //
   void annulras(const PredictorUpdate& predinfo) {
-    logging::println(logging::DEBUG, "Update RAS for uuid {}:", predinfo.uuid);
+    logger.println(logging::DEBUG, "Update RAS for uuid {}:", predinfo.uuid);
     if (predinfo.ras_push)
       ras.annulpush(predinfo.ras_old);
     else
@@ -375,8 +398,8 @@ struct CombinedPredictor {
 // template <int METASIZE, int BIMODSIZE, int L1SIZE, int L2SIZE, int SHIFTWIDTH, bool HISTORYXOR, int BTBSETS, int BTBWAYS, int RASSIZE>
 // G-share constraints: METASIZE, BIMODSIZE, 1, L2SIZE, log2(L2SIZE), (HISTORYXOR = true), BTBSETS, BTBWAYS, RASSIZE
 struct BranchPredictorImplementation : public CombinedPredictor<65536, 65536, 1, 65536, 16, 1, 1024, 4, 1024> {
-  explicit BranchPredictorImplementation(Options& config)
-      : CombinedPredictor<65536, 65536, 1, 65536, 16, 1, 1024, 4, 1024>(config) {}
+  BranchPredictorImplementation(Options& config, logging::Logger& logger)
+      : CombinedPredictor<65536, 65536, 1, 65536, 16, 1, 1024, 4, 1024>(config, logger) {}
 };
 
 void BranchPredictorInterface::destroy() {
@@ -391,7 +414,7 @@ void BranchPredictorInterface::reset() {
 
 void BranchPredictorInterface::init() {
   destroy();
-  impl = new BranchPredictorImplementation(config);
+  impl = new BranchPredictorImplementation(config, logger);
   reset();
 }
 

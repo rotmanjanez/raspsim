@@ -212,8 +212,8 @@ struct HistogramAssociativeArrayStatisticsCollector {
     int hitcountslot = std::clamp(hitcount / HITCOUNT_INTERVAL, 0, HITCOUNT_SLOTS - 1);
     line_hitcount_histogram[hitcountslot]++;
 
-    logging::println("[{}] {}: evicted({}): lifetime {}, deadtime {}, hitcount {} (line addr {})", cache_names[uniq],
-                     sim_cycle, (void*)tag, lifetime, deadtime, hitcount, (void*)&line);
+    machine.logger.println("[{}] {}: evicted({}): lifetime {}, deadtime {}, hitcount {} (line addr {})",
+                           cache_names[uniq], sim_cycle, (void*)tag, lifetime, deadtime, hitcount, (void*)&line);
   }
 
   static void filled(V& line, W64 tag) {
@@ -221,7 +221,8 @@ struct HistogramAssociativeArrayStatisticsCollector {
     line.lasttime = sim_cycle;
     line.hitcount = 1;
 
-    logging::println("[{}] {}: filled({}) (line addr {})", cache_names[uniq], sim_cycle, (void*)tag, (void*)&line);
+    machine.logger.println("[{}] {}: filled({}) (line addr {})", cache_names[uniq], sim_cycle, (void*)tag,
+                           (void*)&line);
   }
 
   static void inserted(V& line, W64 newtag, int way) { filled(line, newtag); }
@@ -232,9 +233,9 @@ struct HistogramAssociativeArrayStatisticsCollector {
   }
 
   static void probed(V& line, W64 tag, int way, bool hit) {
-    logging::println("[{}] {}: probe({}): {} way {}: hitcount {}, filltime {}, lasttime {} (line addr {})",
-                     cache_names[uniq], sim_cycle, (void*)tag, (hit ? "HIT" : "miss"), way, line.hitcount,
-                     line.filltime, line.lasttime, (void*)&line);
+    machine.logger.println("[{}] {}: probe({}): {} way {}: hitcount {}, filltime {}, lasttime {} (line addr {})",
+                           cache_names[uniq], sim_cycle, (void*)tag, (hit ? "HIT" : "miss"), way, line.hitcount,
+                           line.filltime, line.lasttime, (void*)&line);
     if (hit) {
       line.hitcount++;
       line.lasttime = sim_cycle;
@@ -379,6 +380,8 @@ static inline void prep_L2_sframask_and_reqmask(const SFR* sfr, W64 addr, int si
 template<int tlbid, int size>
 struct TranslationLookasideBuffer : public x86sim::FullyAssociativeTagsNbitOneHot<size, 40> {
   typedef x86sim::FullyAssociativeTagsNbitOneHot<size, 40> base_t;
+  // Set by the owning CacheHierarchy; may be null before wiring.
+  logging::Logger* logger = nullptr;
   TranslationLookasideBuffer() : base_t() {}
 
   void reset() { base_t::reset(); }
@@ -397,8 +400,10 @@ struct TranslationLookasideBuffer : public x86sim::FullyAssociativeTagsNbitOneHo
     W64 oldtag;
     int way = base_t::select(tag, oldtag);
     W64 oldaddr = lowbits(oldtag, 36) << 12;
-    logging::println(logging::TRACE, "TLB insertion of virt page {} (virt addr {}) into way {}: {}", (void*)(Waddr)addr,
-                     (void*)(Waddr)(addr), way, ((oldtag != tag) ? "evicted old entry" : "already present"));
+    if (logger)
+      logger->println(logging::TRACE, "TLB insertion of virt page {} (virt addr {}) into way {}: {}",
+                      (void*)(Waddr)addr, (void*)(Waddr)(addr), way,
+                      ((oldtag != tag) ? "evicted old entry" : "already present"));
     return (oldtag != tag);
   }
 
@@ -569,6 +574,8 @@ struct CacheHierarchy {
 
   explicit CacheHierarchy(MachineImpl& machine_) : machine(machine_), lfrq(machine_, *this), missbuf(machine_, *this) {
     callback = null;
+    dtlb.logger = &machine.logger;
+    itlb.logger = &machine.logger;
   }
 
   bool probe_cache_and_sfr(W64 addr, const SFR* sfra, int sizeshift);

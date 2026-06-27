@@ -138,7 +138,7 @@ inline T x86_aluop2(T ra, T rb, W16 rcflags, byte& cf, byte& of) {
   }
 
 UopResult uop_impl_nop(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   out.rddata = 0;
   out.rdflags = 0;
@@ -150,7 +150,7 @@ UopResult uop_impl_nop(const UopInputs& inputs) {
 //
 template<int ptlopcode, template<typename, int> class func, typename T, int genflags>
 inline UopResult aluop(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   byte cf = 0, of = 0;
   func<T, genflags> f;
@@ -182,7 +182,7 @@ inline UopResult aluop(const UopInputs& inputs) {
 
 template<typename T>
 inline UopResult exp_op_mov(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   out.rddata = x86_merge<T>(ra, rb);
   out.rdflags = rbflags;
@@ -212,7 +212,7 @@ make_exp_aluop_all_sizes(bswap, (rd = ((sizeof(T) >= 4) ? std::byteswap(rb) : 0)
 
 template<int ptlopcode, template<typename, int> class func, typename T, int genflags>
 inline UopResult ctzclzop(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   byte cf = 0, of = 0;
   func<T, genflags> f;
@@ -229,7 +229,7 @@ make_exp_aluop(exp_op_clz, (rd = (rb) ? msbindex64(rb) : 0));
 make_anyop_all_sizes(OP_clz, implmap_clz, ctzclzop, exp_op_clz, ZAPS);
 
 UopResult uop_impl_collcc(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   int flags = (raflags & FLAG_ZAPS) | (rbflags & FLAG_CF) | (rcflags & FLAG_OF);
   out.rddata = flags;
@@ -238,7 +238,7 @@ UopResult uop_impl_collcc(const UopInputs& inputs) {
 }
 
 UopResult uop_impl_movrcc(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   int flags = rb & FLAG_NOT_WAIT_INV;
   out.rddata = flags;
@@ -247,7 +247,7 @@ UopResult uop_impl_movrcc(const UopInputs& inputs) {
 }
 
 UopResult uop_impl_movccr(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   int flags = rbflags;
   out.rddata = flags;
@@ -256,7 +256,7 @@ UopResult uop_impl_movccr(const UopInputs& inputs) {
 }
 
 UopResult uop_impl_andcc(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   out.rddata = 0;
   out.rdflags = (raflags & rbflags) & FLAG_NOT_WAIT_INV;
@@ -264,7 +264,7 @@ UopResult uop_impl_andcc(const UopInputs& inputs) {
 }
 
 UopResult uop_impl_orcc(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   out.rddata = 0;
   out.rdflags = (raflags | rbflags) & FLAG_NOT_WAIT_INV;
@@ -272,7 +272,7 @@ UopResult uop_impl_orcc(const UopInputs& inputs) {
 }
 
 UopResult uop_impl_ornotcc(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   out.rddata = 0;
   out.rdflags = (raflags | (~rbflags)) & FLAG_NOT_WAIT_INV;
@@ -280,7 +280,7 @@ UopResult uop_impl_ornotcc(const UopInputs& inputs) {
 }
 
 UopResult uop_impl_xorcc(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   out.rddata = 0;
   out.rdflags = (raflags ^ rbflags) & FLAG_NOT_WAIT_INV;
@@ -296,7 +296,7 @@ make_x86_aluop_all_sizes(sub, sbb, ZAPS | CF | OF, PRETEXT_ALL_FLAGS_IN);
 
 template<int ptlopcode, template<typename, int> class func, typename T, int genflags, int rcshift>
 inline UopResult aluop3s(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   byte cf = 0, of = 0;
   func<T, genflags> f;
@@ -501,7 +501,7 @@ struct RotateCarryRightOp {
 
 template<int ptlopcode, typename Operation, typename T, int genflags>
 inline UopResult shiftop(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   using U = std::make_unsigned_t<T>;
   const auto result = Operation{}(U(ra), T(rb), flag_bit(rcflags, FLAG_CF));
@@ -541,7 +541,7 @@ static constexpr auto implmap_rotcr = shiftop_impls<OP_rotcr, RotateCarryRightOp
 
 template<int ptlopcode, typename T, int ZEROEXT, int SIGNEXT>
 UopResult exp_op_mask(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   static const int sizeshift = log2(sizeof(T));
   W64 shmask = bitmask(6); //bitmask(3 + sizeshift);
@@ -558,16 +558,18 @@ UopResult exp_op_mask(const UopInputs& inputs) {
   W64 M = x86_ror<T>(static_cast<T>(bitmask(mc)), ms);
   W64 rd = (ra & ~M) | (x86_ror<T>(static_cast<T>(rb), ds) & M);
 
-  logging::println(logging::TRACE,
-                   "mask [{}, {}, {}, ss = {}, mcms {} [shmask {} (ms={} mc={} ds={} (mcms {}))]]:", sizeof(T), ZEROEXT,
-                   SIGNEXT, sizeshift, mcms, bitstring(shmask, 18), ms, mc, ds, mcms);
-  logging::println(logging::TRACE, "  M      = {} 0x{:016x}", bitstring(M, 64), M);
-  logging::println(logging::TRACE, "  rot rb = {} 0x{:016x}", bitstring(x86_ror<T>(static_cast<T>(rb), ds), 64),
-                   x86_ror<T>(static_cast<T>(rb), ds));
-  logging::println(logging::TRACE, "  ra     = {:016x}", ra);
-  logging::println(logging::TRACE, "  rb     = {:016x}", rb);
-  logging::println(logging::TRACE, "  rc     = {:016x}", rc);
-  logging::println(logging::TRACE, "  initrd = {:016x}", rd);
+  if (logger) {
+    logger->println(logging::TRACE,
+                    "mask [{}, {}, {}, ss = {}, mcms {} [shmask {} (ms={} mc={} ds={} (mcms {}))]]:", sizeof(T),
+                    ZEROEXT, SIGNEXT, sizeshift, mcms, bitstring(shmask, 18), ms, mc, ds, mcms);
+    logger->println(logging::TRACE, "  M      = {} 0x{:016x}", bitstring(M, 64), M);
+    logger->println(logging::TRACE, "  rot rb = {} 0x{:016x}", bitstring(x86_ror<T>(static_cast<T>(rb), ds), 64),
+                    x86_ror<T>(static_cast<T>(rb), ds));
+    logger->println(logging::TRACE, "  ra     = {:016x}", ra);
+    logger->println(logging::TRACE, "  rb     = {:016x}", rb);
+    logger->println(logging::TRACE, "  rc     = {:016x}", rc);
+    logger->println(logging::TRACE, "  initrd = {:016x}", rd);
+  }
 
   if (ZEROEXT) {
     // rd = rd & 1'[(ms+mc-1):0]
@@ -621,7 +623,7 @@ UopImpl implmap_maskb[4][3] = {
 // into permb in the pipeline, at the cost of additional muxing logic.
 //
 UopResult uop_impl_permb(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   union vec128 {
     struct {
@@ -647,11 +649,13 @@ UopResult uop_impl_permb(const UopInputs& inputs) {
   ab.w64.lo = ra;
   ab.w64.hi = rb;
 
-  logging::println(logging::TRACE, "Permute: by control 0x{:08x}:", rc);
+  if (logger)
+    logger->println(logging::TRACE, "Permute: by control 0x{:08x}:", rc);
   foreach (i, 8) {
     int which = bits(rc, i * 4, 4);
 
-    logging::println(logging::TRACE, "  z[{}] = ab[{}] = 0x{:02x}", i, which, ab.bytes.b[which]);
+    if (logger)
+      logger->println(logging::TRACE, "  z[{}] = ab[{}] = 0x{:02x}", i, which, ab.bytes.b[which]);
     d.bytes.b[i] = ab.bytes.b[which];
   }
 
@@ -734,7 +738,7 @@ struct x86_op_mulhl {
 
 template<typename T>
 inline UopResult uop_impl_mulhl(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   T a = T(ra);
   T b = T(rb);
@@ -760,7 +764,7 @@ UopImpl implmap_mulhl[4] = {&uop_impl_mulhl<W8>, &uop_impl_mulhl<W16>, &uop_impl
 
 template<int ptlopcode, typename T>
 UopResult x86_div(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   T quotient, remainder;
 
@@ -777,7 +781,7 @@ UopResult x86_div(const UopInputs& inputs) {
 
 template<int ptlopcode, typename T>
 UopResult x86_rem(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   T quotient, remainder;
 
@@ -794,7 +798,7 @@ UopResult x86_rem(const UopInputs& inputs) {
 
 template<int ptlopcode, typename T>
 UopResult x86_divs(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   T quotient, remainder;
 
@@ -811,7 +815,7 @@ UopResult x86_divs(const UopInputs& inputs) {
 
 template<int ptlopcode, typename T>
 UopResult x86_rems(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   T quotient, remainder;
 
@@ -835,7 +839,7 @@ UopImpl implmap_rems[4] = {&x86_rems<OP_rems, W8>, &x86_rems<OP_rems, W16>, &x86
 
 template<int ptlopcode, typename T, bool compare_for_max>
 UopResult uop_impl_min_max(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   T a = ra;
   T b = rb;
@@ -939,7 +943,7 @@ struct and_flag_gen_op {
 //
 template<int ptlopcode, typename T, int evaltype>
 inline UopResult uop_impl_sel(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   bool istrue = evaluate_cond<evaltype>(rcflags, rcflags);
   out.rddata = x86_merge<T>(ra, (istrue) ? rb : ra);
@@ -966,7 +970,7 @@ make_condop_all_conds_all_sizes(sel, uop_impl_sel);
 
 template<int ptlopcode, typename Tmerge, typename Tcompare, int evaltype>
 inline UopResult uop_impl_sel_cmp(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   int flags = x86_genflags<Tcompare>(rc);
   bool istrue = evaluate_cond<evaltype>(flags, flags);
@@ -982,7 +986,7 @@ make_condop_all_conds_all_sizes_all_compare_sizes(sel_cmp, uop_impl_sel_cmp);
 //
 template<int ptlopcode, typename T, int evaltype>
 inline UopResult uop_impl_set(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   bool istrue = evaluate_cond<evaltype>(raflags, rbflags);
   out.rddata = x86_merge<T>(rc, (istrue) ? 1 : 0);
@@ -994,7 +998,7 @@ make_condop_all_conds_all_sizes(set, uop_impl_set);
 
 template<int ptlopcode, typename Tmerge, typename Tcompare, int evaltype>
 inline UopResult uop_impl_set_and(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   and_flag_gen_op<Tcompare> func;
   int flags = func(ra, rb);
@@ -1008,7 +1012,7 @@ make_condop_all_conds_all_sizes_all_compare_sizes(set_and, uop_impl_set_and);
 
 template<int ptlopcode, typename Tmerge, typename Tcompare, int evaltype>
 inline UopResult uop_impl_set_sub(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   sub_flag_gen_op<Tcompare> func;
   int flags = func(ra, rb);
@@ -1026,7 +1030,7 @@ make_condop_all_conds_all_sizes_all_compare_sizes(set_sub, uop_impl_set_sub);
 
 template<int ptlopcode, typename T, int evaltype, bool excepting>
 inline UopResult uop_impl_condbranch(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   bool taken = evaluate_cond<evaltype>(raflags, rbflags);
   out.rddata = (taken) ? riptaken : ripseq;
@@ -1046,7 +1050,7 @@ make_condop_all_conds_any(OP_br, make_branchop_all_excepts, [2], br, anything);
 
 template<int ptlopcode, typename T, int evaltype, bool excepting, template<typename> class func_t>
 inline UopResult uop_impl_alu_and_condbranch(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   func_t<T> func;
   int flags = func(ra, rb);
@@ -1077,7 +1081,7 @@ make_condop_all_conds_any(OP_br_and, make_alu_and_branchop_all_sizes_all_excepts
 make_condop_all_conds_any(OP_br_sub, make_alu_and_branchop_all_sizes_all_excepts, [4][2], br_sub, sub_flag_gen_op);
 
 UopResult uop_impl_jmp(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   bool taken = (riptaken == ra);
   out.rddata = ra;
@@ -1086,7 +1090,7 @@ UopResult uop_impl_jmp(const UopInputs& inputs) {
 }
 
 UopResult uop_impl_jmp_ex(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   bool taken = (riptaken == ra);
   out.rddata = ra;
@@ -1100,7 +1104,7 @@ UopResult uop_impl_jmp_ex(const UopInputs& inputs) {
 }
 
 UopResult uop_impl_bru(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   out.rddata = riptaken;
   out.rdflags = FLAG_BR_TK;
@@ -1108,7 +1112,7 @@ UopResult uop_impl_bru(const UopInputs& inputs) {
 }
 
 UopResult uop_impl_brp(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   out.rddata = riptaken;
   out.rdflags = FLAG_BR_TK;
@@ -1120,7 +1124,7 @@ UopResult uop_impl_brp(const UopInputs& inputs) {
 //
 template<int ptlopcode, int evaltype>
 inline UopResult uop_impl_chk(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   bool passed = evaluate_cond<evaltype>(raflags, rbflags);
   out.rddata = (passed) ? 0 : rc;
@@ -1131,7 +1135,7 @@ inline UopResult uop_impl_chk(const UopInputs& inputs) {
 
 template<int ptlopcode, typename T, int evaltype>
 inline UopResult uop_impl_chk_sub(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   sub_flag_gen_op<T> func;
   int flags = func(ra, rb);
@@ -1144,7 +1148,7 @@ inline UopResult uop_impl_chk_sub(const UopInputs& inputs) {
 
 template<int ptlopcode, typename T, int evaltype>
 inline UopResult uop_impl_chk_and(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   and_flag_gen_op<T> func;
   int flags = func(ra, rb);
@@ -1175,7 +1179,7 @@ make_condop_all_conds_all_sizes(chk_and, uop_impl_chk_and);
 
 template<int ptlopcode, template<typename> class F, int datatype>
 inline UopResult floatop(const UopInputs& inputs) {
-  [[maybe_unused]] auto [raraw, rbraw, rcraw, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [raraw, rbraw, rcraw, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   SSEType ra, rb, rc, rd;
   ra.w64 = raraw;
@@ -1249,7 +1253,7 @@ static inline T fcmp_result(T ra, T rb) {
 
 template<int ptlopcode, SSEFloatType type, typename Operation>
 UopResult floatop2(const UopInputs& inputs) {
-  [[maybe_unused]] auto [raraw, rbraw, rcraw, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [raraw, rbraw, rcraw, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   SSEType ra, rb, rd;
   ra.w64 = raraw;
@@ -1347,7 +1351,7 @@ static constexpr auto implmap_fmax = floatop2_impls<OP_fmax, FloatMax>;
 
 template<SSEFloatType type>
 UopResult x86_op_fmadd(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   //
   // fmadd  rd = (ra * rb) + rc       =>  fmul t0 = ra,rb  |  fadd t1 = t0,rc
   //
@@ -1360,7 +1364,7 @@ UopImpl implmap_fmadd[4] = {&x86_op_fmadd<SSEFloatType::ScalarSingle>, &x86_op_f
 
 template<SSEFloatType type>
 UopResult x86_op_fmsub(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   //
   // fmsub  rd = (ra * rb) - rc       =>  fmul t0 = ra,rb  |  fsub t1 = t0,rc
   //
@@ -1373,7 +1377,7 @@ UopImpl implmap_fmsub[4] = {&x86_op_fmsub<SSEFloatType::ScalarSingle>, &x86_op_f
 
 template<SSEFloatType type>
 UopResult x86_op_fmsubr(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   //
   // fmsubr rd = rc - (ra * rb)       =>  fmul t0 = ra,rb  |  fsub t1 = rc,t0
   //
@@ -1395,7 +1399,7 @@ static constexpr std::array<std::array<UopImpl, 4>, 8> implmap_fcmp = {
 // and unordered variants behave identically.
 template<int comptype>
 UopResult uop_impl_fcmpcc(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   constexpr bool dbl = (comptype >= 2);
   const SSEType a(ra), b(rb);
@@ -1419,7 +1423,7 @@ UopImpl implmap_fcmpcc[8][4] = {&uop_impl_fcmpcc<0>, &uop_impl_fcmpcc<1>, &uop_i
 
 #define make_intsrc_fp_convop(name, op)                                                                                \
   UopResult uop_impl_##name(const UopInputs& inputs) {                                                                 \
-    [[maybe_unused]] auto [raraw, rbraw, rcraw, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;                 \
+    [[maybe_unused]] auto [raraw, rbraw, rcraw, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;         \
     UopResult out;                                                                                                     \
     SSEType ra, rb, rc, rd;                                                                                            \
     ra.w64 = raraw;                                                                                                    \
@@ -1461,7 +1465,7 @@ static inline Int x86_fp_to_int(double v, bool trunc) {
 #define make_intdest_fp_convop_allrounds(name, desttype, srcexpr)                                                      \
   template<int ptlopcode, int trunc>                                                                                   \
   UopResult uop_impl_##name(const UopInputs& inputs) {                                                                 \
-    [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;                          \
+    [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;                  \
     UopResult out;                                                                                                     \
     const SSEType src(rb);                                                                                             \
     out.rddata = x86_fp_to_int<desttype>(srcexpr, trunc);                                                              \
@@ -1478,7 +1482,7 @@ make_intdest_fp_convop_allrounds(fcvt_d2q, W64, src.d);
 #define make_fp_convop_allrounds(name, expr)                                                                           \
   template<int trunc>                                                                                                  \
   UopResult uop_impl_##name(const UopInputs& inputs) {                                                                 \
-    [[maybe_unused]] auto [raraw, rbraw, rcraw, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;                 \
+    [[maybe_unused]] auto [raraw, rbraw, rcraw, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;         \
     UopResult out;                                                                                                     \
     const SSEType ra(raraw), rb(rbraw);                                                                                \
     SSEType rd;                                                                                                        \
@@ -1504,7 +1508,7 @@ make_fp_convop_allrounds(fcvt_d2s_p, (rd.f.lo = (float)rb.d, rd.f.hi = (float)ra
 // Dummy (to fill in unsupported places only)
 template<int ptlopcode, int sizeshift>
 UopResult x86_op_nop(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   out.rddata = 0;
   out.rdflags = 0;
@@ -1522,7 +1526,7 @@ static constexpr Lane saturate(W64s v) {
 
 template<int ptlopcode, typename Lane, auto op>
 UopResult vecop(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   auto a = std::bit_cast<LaneArray<Lane>>(ra);
   const auto b = std::bit_cast<LaneArray<Lane>>(rb);
@@ -1539,7 +1543,7 @@ enum class VecShift { Left, Right, RightArith };
 
 template<int ptlopcode, typename Lane, VecShift kind>
 UopResult vecshift(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   constexpr W64 width = sizeof(Lane) * 8;
   auto a = std::bit_cast<LaneArray<Lane>>(ra);
@@ -1560,7 +1564,7 @@ UopResult vecshift(const UopInputs& inputs) {
 // half of the result comes from ra, the high half from rb.
 template<int ptlopcode, typename Lane, bool unsigned_sat>
 UopResult vecpack(const UopInputs& inputs) {
-  [[maybe_unused]] auto [raraw, rbraw, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [raraw, rbraw, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   // The guard keeps the wide (unused, nop-dispatched) lane widths from being
   // instantiated by make_vec_implmap: their source lanes would exceed 64 bits.
@@ -1626,7 +1630,7 @@ make_vec_implmap(vmulhu, vecop, sizes(0, 1, 0, 0),
 // pmaddwd: pairwise dot product of signed words into dwords. The accumulation
 // is done in unsigned arithmetic: 0x8000*0x8000 + 0x8000*0x8000 wraps on x86.
 UopResult uop_impl_vmaddp_w(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   const auto a = std::bit_cast<LaneArray<W16s>>(ra);
   const auto b = std::bit_cast<LaneArray<W16s>>(rb);
@@ -1643,7 +1647,7 @@ UopImpl implmap_vmaddp[4] = {&x86_op_nop<OP_vmaddp, 0>, &uop_impl_vmaddp_w, &x86
 
 // psadbw: sum of absolute byte differences
 UopResult uop_impl_vsad_w(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   const auto a = std::bit_cast<LaneArray<W8>>(ra);
   const auto b = std::bit_cast<LaneArray<W8>>(rb);
@@ -1680,7 +1684,7 @@ make_vec_implmap(vpack_ss, vecpack, sizes(1, 1, 0, 0), false);
 //
 template<int sizeshift>
 UopResult uop_impl_vbt(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   int sizebits = (1 << sizeshift) * 8;
 
@@ -1722,7 +1726,7 @@ W16 compare_and_gen_flags(T ra, T rb) {
 
 template<int sizeshift, int cond>
 UopResult uop_impl_vcmp(const UopInputs& inputs) {
-  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq] = inputs;
+  [[maybe_unused]] auto [ra, rb, rc, raflags, rbflags, rcflags, riptaken, ripseq, logger] = inputs;
   UopResult out;
   int sizebits = (1 << sizeshift) * 8;
 
@@ -2167,8 +2171,8 @@ UopImpl get_synthcode_for_uop(int op, int size, bool setflags, int cond, int ext
     func = implmap_vpack_ss[size];
     break;
   default:
-    logging::println("Unknown uop opcode {} ({})", op, nameof(op));
-    logging::flush();
+    // Build-time dispatch with no machine in scope; report to stderr.
+    logging::eprintln("Unknown uop opcode {} ({})", op, nameof(op));
     assert(false);
   }
   return func;

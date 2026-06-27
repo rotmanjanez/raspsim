@@ -28,13 +28,13 @@ namespace x86sim {
 // Global variables
 //
 PTLsimStats stats;
-
-bool logenable = 0;
 #endif
 
 MachineImpl::MachineImpl(Machine& owner_, Options config_)
     : owner(owner_), callbacks(owner_.callbacks_), config(std::move(config_)),
-      bbcache(std::make_unique<BasicBlockCache>()) {}
+      bbcache(std::make_unique<BasicBlockCache>()) {
+  bbcache->machine = this;
+}
 
 MachineImpl::~MachineImpl() = default;
 
@@ -52,12 +52,12 @@ Context::Context(const Options& config, MachineImpl& core, int vcpuid_) : Contex
 std::string current_log_filename;
 std::string current_bbcache_dump_filename;
 
-void backup_and_reopen_logfile(const Options& options) {
+void backup_and_reopen_logfile(logging::Logger& logger, const Options& options) {
   if (!options.log.log_filename.empty()) {
     std::string log_filename = options.log.log_filename.string();
 
     // Close existing log
-    logging::flush();
+    logger.flush();
 
     // Backup old log file
     std::string oldname = std::format("{}.backup", log_filename);
@@ -65,30 +65,30 @@ void backup_and_reopen_logfile(const Options& options) {
     std::rename(log_filename.c_str(), oldname.c_str());
 
     // Open new log file
-    logging::set_file_sink(log_filename.c_str());
+    logger.set_file_sink(log_filename.c_str());
   }
 }
 
-void force_logging_enabled(Options& options) {
-  logenable = 1;
+void force_logging_enabled(logging::Logger& logger, Options& options) {
+  logger.set_enabled(true);
   options.log.start_log_at_iteration = 0;
   options.log.loglevel = static_cast<int>(logging::Level::VERBOSE); // Maximum verbosity
-  logging::set_level(logging::VERBOSE);
+  logger.set_level(logging::VERBOSE);
   options.log.flush_event_log_every_cycle = 1;
 }
 
-bool handle_config_change(Options& options, int argc, char** argv) {
+bool handle_config_change(logging::Logger& logger, Options& options, int argc, char** argv) {
   static bool first_time = true;
 
   std::string log_filename = options.log.log_filename.string();
   if (!options.log.log_filename.empty() && (log_filename != current_log_filename)) {
     // Can also use "-logfile /dev/fd/1" to send to stdout (or /dev/fd/2 for stderr):
-    backup_and_reopen_logfile(options);
+    backup_and_reopen_logfile(logger, options);
     current_log_filename = log_filename;
   }
 
   // Set log level in the new logging system
-  logging::set_level(static_cast<int>(options.log.loglevel));
+  logger.set_level(static_cast<int>(options.log.loglevel));
 
   if ((options.log.loglevel > 0) & (options.log.start_log_at_rip == INVALIDRIP) &
       (options.log.start_log_at_iteration == std::numeric_limits<W64s>::max())) {
@@ -107,13 +107,13 @@ bool handle_config_change(Options& options, int argc, char** argv) {
   //
   if (options.log.start_log_at_rip != INVALIDRIP) {
     options.log.start_log_at_iteration = std::numeric_limits<W64s>::max();
-    logenable = 0;
+    logger.set_enabled(false);
   } else if (options.log.start_log_at_iteration != std::numeric_limits<W64s>::max()) {
     options.log.start_log_at_rip = INVALIDRIP;
-    logenable = 0;
+    logger.set_enabled(false);
   }
 
-  logenable = 1;
+  logger.set_enabled(true);
 
   if (!options.debug.bbcache_dump_filename.empty() &&
       (options.debug.bbcache_dump_filename != current_bbcache_dump_filename)) {
@@ -122,7 +122,7 @@ bool handle_config_change(Options& options, int argc, char** argv) {
       std::fclose(bbcache_dump_file);
     bbcache_dump_file = std::fopen(options.debug.bbcache_dump_filename.c_str(), "wb");
     if (!bbcache_dump_file) {
-      logging::println(logging::WARNING, "Cannot open bb dump file '{}'", options.debug.bbcache_dump_filename);
+      logger.println(logging::WARNING, "Cannot open bb dump file '{}'", options.debug.bbcache_dump_filename);
     }
     current_bbcache_dump_filename = options.debug.bbcache_dump_filename;
   }
@@ -136,7 +136,7 @@ bool handle_config_change(Options& options, int argc, char** argv) {
     if (!options.quiet) {
       logging::eprint("{}", PTLsimBanner{argc, argv});
     }
-    logging::println(logging::INFO, "{}", options);
+    logger.println(logging::INFO, "{}", options);
     first_time = false;
   }
 

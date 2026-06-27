@@ -85,6 +85,9 @@ namespace x86sim {
 class Machine;
 struct MachineImpl;
 struct Options;
+namespace logging {
+class Logger;
+}
 
 //
 // Exceptions:
@@ -201,6 +204,10 @@ struct UopInputs {
   W16 rcflags = 0;
   W64 riptaken = 0;
   W64 ripseq = 0;
+  // The executing machine's logger, supplied by the core at the call site so the
+  // (otherwise instance-less) uop implementations can log against it. May be
+  // null; uop impls must null-check before logging.
+  logging::Logger* logger = nullptr;
 };
 
 struct UopResult {

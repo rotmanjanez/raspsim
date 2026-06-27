@@ -43,8 +43,8 @@ void OutOfOrderCoreCacheCallbacks::icache_wakeup(LoadStoreInfo lsi, W64 physaddr
     auto& thread = core.threads[i];
     if unlikely (thread && thread->waiting_for_icache_fill &&
                  (floor(thread->waiting_for_icache_fill_physaddr, CacheSubsystem::L1_LINE_SIZE) == physaddr)) {
-      logging::println(logging::TRACE, "[vcpu {}] i-cache wakeup of physaddr {}", thread->ctx.vcpuid,
-                       (void*)(Waddr)physaddr);
+      core.machine.logger.println(logging::TRACE, "[vcpu {}] i-cache wakeup of physaddr {}", thread->ctx.vcpuid,
+                                  (void*)(Waddr)physaddr);
       thread->waiting_for_icache_fill = 0;
       thread->waiting_for_icache_fill_physaddr = 0;
     }
@@ -117,11 +117,12 @@ void ThreadContext::flush_pipeline() {
   // architectural state.
   if unlikely (rob_ready_to_commit_queue.count && !ROB.peekhead()->uop.som) {
 
-    logging::println("[vcpu {}] thread {}: Flushing through a partially committed x86 instruction, this is likely BAD:",
-                     ctx.vcpuid, threadid);
+    core.machine.logger.println(
+        "[vcpu {}] thread {}: Flushing through a partially committed x86 instruction, this is likely BAD:", ctx.vcpuid,
+        threadid);
     foreach_forward(ROB, i) {
       ReorderBufferEntry& rob = ROB[i];
-      logging::println(logging::INFO, "  rob {} uuid {}", rob.index(), rob.uop.uuid);
+      core.machine.logger.println(logging::INFO, "  rob {} uuid {}", rob.index(), rob.uop.uuid);
       if (rob.uop.eom)
         break;
     }
@@ -219,7 +220,7 @@ void ThreadContext::reset_fetch_unit(W64 realrip) {
 void ThreadContext::invalidate_smc() {
   if unlikely (smc_invalidate_pending) {
     AddressSpace& asp = *ctx.address_space;
-    logging::println(logging::DEBUG, "SMC invalidate pending on {}", smc_invalidate_rvp);
+    core.machine.logger.println(logging::DEBUG, "SMC invalidate pending on {}", smc_invalidate_rvp);
     core.machine.bbcache->invalidate_page(asp, smc_invalidate_rvp.mfnlo, INVALIDATE_REASON_SMC);
     if unlikely (smc_invalidate_rvp.mfnlo != smc_invalidate_rvp.mfnhi)
       core.machine.bbcache->invalidate_page(asp, smc_invalidate_rvp.mfnhi, INVALIDATE_REASON_SMC);
@@ -305,7 +306,7 @@ void ThreadContext::external_to_core_state() {
 // a result or are otherwise stalled.
 //
 void ThreadContext::redispatch_deadlock_recovery() {
-  logging::println(logging::TRACE, "Deadlock recovery SMT state:");
+  core.machine.logger.println(logging::TRACE, "Deadlock recovery SMT state:");
   core.dump_smt_state();
 
   per_context_ooocore_stats_update(threadid, dispatch.redispatch.deadlock_flushes++);
@@ -314,7 +315,7 @@ void ThreadContext::redispatch_deadlock_recovery() {
   flush_pipeline();
   last_commit_at_cycle =
       previous_last_commit_at_cycle; /// so we can exit after no commit after deadlock recovery a few times in a roll
-  logging::println(
+  core.machine.logger.println(
       "[vcpu {}] thread {}: reset thread.last_commit_at_cycle to be before redispatch_deadlock_recovery() {}",
       ctx.vcpuid, threadid, previous_last_commit_at_cycle);
   /*
@@ -369,12 +370,12 @@ void ThreadContext::redispatch_deadlock_recovery() {
 static RIPVirtPhys fetch_bb_address_ringbuf[256];
 static W64 fetch_bb_address_ringbuf_head = 0;
 
-static void print_fetch_bb_address_ringbuf() {
-  logging::println("Head: {}", fetch_bb_address_ringbuf_head);
+[[maybe_unused]] static void print_fetch_bb_address_ringbuf(logging::Logger& logger) {
+  logger.println("Head: {}", fetch_bb_address_ringbuf_head);
   foreach (i, lengthof(fetch_bb_address_ringbuf)) {
     int j = (fetch_bb_address_ringbuf_head + i) % lengthof(fetch_bb_address_ringbuf);
     const RIPVirtPhys& addr = fetch_bb_address_ringbuf[j];
-    logging::println("  {:>16}: {}", i, addr);
+    logger.println("  {:>16}: {}", i, addr);
   }
 }
 
@@ -460,7 +461,7 @@ bool ThreadContext::fetch() {
 
     if unlikely ((fetchrip.rip == config.log.start_log_at_rip) && (fetchrip.rip != 0xffffffffffffffffULL)) {
       config.log.start_log_at_iteration = 0;
-      logenable = 1;
+      core.machine.logger.set_enabled(true);
     }
 
     if unlikely ((!current_basic_block) || (current_basic_block_transop_index >= current_basic_block->count)) {
@@ -1520,14 +1521,15 @@ void ThreadContext::flush_mem_lock_release_list(int start) {
     MemoryInterlockEntry* lock = interlocks.probe(lockaddr);
 
     if (!lock) {
-      logging::println("ERROR: thread {}: attempted to release queued lock #{} for physaddr {}: lock was {}",
-                       ctx.vcpuid, i, (void*)lockaddr, (void*)lock);
+      core.machine.logger.println("ERROR: thread {}: attempted to release queued lock #{} for physaddr {}: lock was {}",
+                                  ctx.vcpuid, i, (void*)lockaddr, (void*)lock);
       assert(false);
     }
 
     if (lock->vcpuid != ctx.vcpuid) {
-      logging::println("ERROR: thread {}: attempted to release queued lock #{} for physaddr {}: lock vcpuid was {}",
-                       ctx.vcpuid, i, (void*)lockaddr, lock->vcpuid);
+      core.machine.logger.println(
+          "ERROR: thread {}: attempted to release queued lock #{} for physaddr {}: lock vcpuid was {}", ctx.vcpuid, i,
+          (void*)lockaddr, lock->vcpuid);
       assert(false);
     }
 
@@ -1814,11 +1816,12 @@ int ReorderBufferEntry::commit() {
 
   if unlikely (config.log.event_log_enabled) {
     if unlikely ((uop.rip.rip == config.log.log_backwards_from_trigger_rip) && (uop.som)) {
-      logging::println("Hit trigger rip {}; printing event ring buffer:", config.log.log_backwards_from_trigger_rip);
-      logging::flush();
+      core.machine.logger.println("Hit trigger rip {}; printing event ring buffer:",
+                                  config.log.log_backwards_from_trigger_rip);
+      core.machine.logger.flush();
       core.eventlog.print();
-      logging::println("End of triggered event dump");
-      logging::flush();
+      core.machine.logger.println("End of triggered event dump");
+      core.machine.logger.flush();
     }
   }
 
@@ -1997,8 +2000,8 @@ int ReorderBufferEntry::commit() {
 
   if unlikely (uop_is_eom &
                (thread.stop_at_next_eom || core.machine.total_user_insns_committed >= config.stop_at_user_insns)) {
-    logging::println("[vcpu {}] Stopping at cycle {} ({} commits)", thread.ctx.vcpuid, core.machine.sim_cycle,
-                     core.machine.total_user_insns_committed);
+    core.machine.logger.println("[vcpu {}] Stopping at cycle {} ({} commits)", thread.ctx.vcpuid,
+                                core.machine.sim_cycle, core.machine.total_user_insns_committed);
     return COMMIT_RESULT_STOP;
   }
 
