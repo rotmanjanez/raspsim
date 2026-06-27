@@ -123,6 +123,7 @@ inline constexpr word_t syscall_set_robust_list = 273;
 inline constexpr word_t syscall_prlimit64 = 302;
 inline constexpr word_t syscall_dup3 = 292;
 inline constexpr word_t syscall_rseq = 334;
+inline constexpr word_t syscall_getrandom = 318;
 
 inline constexpr int linux_enoent = 2;
 inline constexpr int linux_esrch = 3;

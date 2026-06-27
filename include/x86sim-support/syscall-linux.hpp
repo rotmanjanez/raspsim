@@ -130,6 +130,16 @@ struct SysRseq {
                                                          SyscallKind) noexcept;
 };
 
+// getrandom(buf, buflen, flags): fills the guest buffer with deterministic
+// pseudo-random bytes (a fixed-seed splitmix64 stream) and returns buflen. The
+// fill is portable and reproducible -- no host entropy source is touched -- so
+// the simulator stays deterministic. glibc >= 2.36 calls this at startup to seed
+// the stack canary / pointer guard.
+struct SysGetrandom {
+  [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, ProcessId, CpuState&, AddressSpace&,
+                                                         SyscallKind) noexcept;
+};
+
 struct SysPrlimit64 {
   struct Limit {
     word_t current;

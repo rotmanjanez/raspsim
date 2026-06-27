@@ -522,7 +522,7 @@ int main(int argc, char** argv) {
         x86sim::linux_syscalls::SysSetTidAddress{} | x86sim::linux_syscalls::SysSetRobustList{} |
         x86sim::linux_syscalls::SysRseq{} | x86sim::linux_syscalls::SysPrlimit64{} | x86sim::linux_syscalls::SysMmap{} |
         x86sim::linux_syscalls::SysMunmap{} | x86sim::linux_syscalls::SysMremap{} |
-        x86sim::linux_syscalls::SysExit{&exit_status, processes} |
+        x86sim::linux_syscalls::SysGetrandom{} | x86sim::linux_syscalls::SysExit{&exit_status, processes} |
         x86sim::linux_syscalls::SysExitGroup{&exit_status, processes});
 
     x86sim::Options options;

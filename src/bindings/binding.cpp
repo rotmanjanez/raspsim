@@ -408,13 +408,14 @@ private:
            x86sim::linux_syscalls::SysSetTidAddress{} | x86sim::linux_syscalls::SysSetRobustList{} |
            x86sim::linux_syscalls::SysRseq{} | x86sim::linux_syscalls::SysPrlimit64{} |
            x86sim::linux_syscalls::SysUname{} | x86sim::linux_syscalls::SysGetIdentity{} |
-           x86sim::linux_syscalls::SysFutex{} | x86sim::linux_syscalls::SysSignals{}) glibc_syscalls =
+           x86sim::linux_syscalls::SysFutex{} | x86sim::linux_syscalls::SysSignals{} |
+           x86sim::linux_syscalls::SysGetrandom{}) glibc_syscalls =
       x86sim::linux_syscalls::SysBrk{} | x86sim::linux_syscalls::SysMmap{} | x86sim::linux_syscalls::SysMunmap{} |
       x86sim::linux_syscalls::SysMremap{} | x86sim::linux_syscalls::SysArchPrctl{} |
       x86sim::linux_syscalls::SysSetTidAddress{} | x86sim::linux_syscalls::SysSetRobustList{} |
       x86sim::linux_syscalls::SysRseq{} | x86sim::linux_syscalls::SysPrlimit64{} | x86sim::linux_syscalls::SysUname{} |
       x86sim::linux_syscalls::SysGetIdentity{} | x86sim::linux_syscalls::SysFutex{} |
-      x86sim::linux_syscalls::SysSignals{};
+      x86sim::linux_syscalls::SysSignals{} | x86sim::linux_syscalls::SysGetrandom{};
 };
 
 class PyMachine {

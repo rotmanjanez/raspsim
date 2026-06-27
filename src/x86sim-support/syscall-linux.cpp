@@ -22,6 +22,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <random>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -658,6 +659,49 @@ std::optional<SyscallResult> SysRseq::try_syscall(Machine&, ProcessId, CpuState&
     return std::nullopt;
 
   return detail::return_error(context, detail::linux_enosys);
+}
+
+std::optional<SyscallResult> SysGetrandom::try_syscall(Machine&, ProcessId, CpuState& context, AddressSpace& space,
+                                                       SyscallKind kind) noexcept {
+  if (!detail::handles(context, kind, detail::syscall_getrandom))
+    return std::nullopt;
+
+  const address_t buffer_address = detail::syscall_arg(context, 0);
+  const word_t length = detail::syscall_arg(context, 1);
+  // flags (arg 2: GRND_NONBLOCK / GRND_RANDOM) are irrelevant to a deterministic
+  // entropy source: we never block and the same stream backs both pools.
+
+  if (length == 0)
+    return detail::return_value(context, 0);
+  if (buffer_address == 0)
+    return detail::return_error(context, detail::linux_efault);
+  if (detail::range_overflows(buffer_address, length))
+    return detail::return_error(context, detail::linux_efault);
+
+  // Deterministic, portable stream: a std::mt19937_64 with a fixed seed (the
+  // "RASPsim!" constant, matching the AT_RANDOM bytes). We deliberately do NOT
+  // use std::random_device / any host entropy -- the simulator must be
+  // reproducible and host-independent (wasm target), so getrandom returns
+  // synthetic bytes like the library's other syscalls.
+  std::mt19937_64 rng{0x5241535073696D21ULL};
+  std::array<std::byte, 256> chunk{};
+  word_t remaining = length;
+  address_t cursor = buffer_address;
+  while (remaining > 0) {
+    const word_t n = std::min<word_t>(remaining, chunk.size());
+    for (word_t i = 0; i < n;) {
+      const std::uint64_t z = rng();
+      for (int b = 0; b < 8 && i < n; ++b, ++i)
+        chunk[i] = static_cast<std::byte>((z >> (8 * b)) & 0xFF);
+    }
+    auto written = space.write(cursor, std::span<const std::byte>(chunk.data(), n));
+    if (!written)
+      return detail::return_error(context, detail::memory_error_to_linux(written.error()));
+    cursor += n;
+    remaining -= n;
+  }
+
+  return detail::return_value(context, static_cast<std::int64_t>(length));
 }
 
 std::optional<SyscallResult> SysPrlimit64::try_syscall(Machine& machine, ProcessId context_id, CpuState& context,
