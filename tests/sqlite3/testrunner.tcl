@@ -28,34 +28,23 @@ set argv $saved
 cd $dir
 
 proc trd_early_x86sim_command {testfixture} {
-  set x86sim [expr {[info exists ::env(X86SIM)] ? $::env(X86SIM) : ""}]
-  set core [expr {[info exists ::env(X86SIM_CORE)] ? $::env(X86SIM_CORE) : "seq"}]
-  set x86sim_args [expr {[info exists ::env(X86SIM_ARGS)] ? $::env(X86SIM_ARGS) : [list]}]
-
-  for {set ii 0} {$ii < [llength $::argv]} {incr ii} {
-    set arg [lindex $::argv $ii]
-    if {$arg=="--x86sim"} {
-      incr ii
-      set x86sim [lindex $::argv $ii]
-    } elseif {[string match "--x86sim=*" $arg]} {
-      set x86sim [string range $arg 9 end]
-    } elseif {$arg=="--x86sim-core"} {
-      incr ii
-      set core [lindex $::argv $ii]
-    } elseif {[string match "--x86sim-core=*" $arg]} {
-      set core [string range $arg 14 end]
-    } elseif {$arg=="--x86sim-arg"} {
-      incr ii
-      lappend x86sim_args [lindex $::argv $ii]
-    } elseif {[string match "--x86sim-arg=*" $arg]} {
-      lappend x86sim_args [string range $arg 13 end]
-    }
+  # This is invoked when testrunner.tcl was started under a plain tclsh (which
+  # lacks the sqlite3 package) and re-execs itself under a testfixture that has
+  # it. That testfixture is only the *orchestrator*: it drives the run, and to
+  # launch each test job it fork()s a child (see launch_another_job). The
+  # simulator does not implement fork(), so the orchestrator must run natively.
+  #
+  # x86sim is applied per-job instead -- trd_x86sim_wrap_testfixture wraps the
+  # testfixture that actually executes each .test file -- so the code under
+  # test still runs on the simulator while the driver stays on the host.
+  #
+  # find_interpreter located it as ./testfixture in the current directory; keep
+  # the explicit "./" so [exec] runs that file rather than searching $PATH for a
+  # bare name (which would fail silently).
+  if {[string first / $testfixture] < 0} {
+    set testfixture "./$testfixture"
   }
-
-  if {$x86sim==""} {
-    return [list $testfixture]
-  }
-  return [concat [list $x86sim "--core=$core"] $x86sim_args [list $testfixture]]
+  return [list $testfixture]
 }
 
 # This script requires an interpreter that supports [package require sqlite3]
