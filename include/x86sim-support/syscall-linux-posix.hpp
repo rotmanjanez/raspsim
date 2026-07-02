@@ -32,6 +32,16 @@ struct SysPreadPwrite {
                                                          SyscallKind) noexcept;
 };
 
+// readv(fd, iov, iovcnt) / writev(fd, iov, iovcnt): scatter/gather variants of
+// read/write. musl's stdio uses writev to flush a FILE together with its line
+// buffer in a single call, so any guest that prints more than a trickle of
+// output through buffered stdio (including the SQLite testrunner orchestrator
+// running under the simulator) depends on this syscall.
+struct SysReadvWritev {
+  [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, ProcessId, CpuState&, AddressSpace&,
+                                                         SyscallKind) noexcept;
+};
+
 struct SysOpen {
   [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, ProcessId, CpuState&, AddressSpace&,
                                                          SyscallKind) noexcept;

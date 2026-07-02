@@ -1333,6 +1333,124 @@ std::optional<SyscallResult> SysPreadPwrite::try_syscall(Machine& machine, Proce
   }
 }
 
+std::optional<SyscallResult> SysReadvWritev::try_syscall(Machine& machine, ProcessId context_id, CpuState& context,
+                                                         AddressSpace& space, SyscallKind kind) noexcept {
+  const bool is_writev = detail::handles(context, kind, detail::syscall_writev);
+  if (!is_writev && !detail::handles(context, kind, detail::syscall_readv))
+    return std::nullopt;
+
+  const auto fd = host_fd_for(context_id, detail::syscall_arg(context, 0));
+  if (!fd)
+    return detail::return_error(context, detail::linux_ebadf);
+
+  const address_t iov_address = detail::syscall_arg(context, 1);
+  const auto raw_iovcnt = static_cast<std::int64_t>(detail::syscall_arg(context, 2));
+
+  // iovcnt is a signed int: the kernel rejects negatives and anything past
+  // UIO_MAXIOV (1024) with EINVAL and treats zero as a no-op.
+  constexpr std::int64_t max_iov = 1024;
+  if (raw_iovcnt < 0 || raw_iovcnt > max_iov)
+    return detail::return_error(context, detail::linux_einval);
+  if (raw_iovcnt == 0)
+    return detail::return_value(context, 0);
+
+  const auto iovcnt = static_cast<std::size_t>(raw_iovcnt);
+  constexpr std::size_t iovec_bytes = 2 * sizeof(word_t);  // struct iovec { void* iov_base; size_t iov_len; }
+  const auto table_bytes = static_cast<word_t>(iovcnt * iovec_bytes);
+  if (detail::range_overflows(iov_address, table_bytes))
+    return detail::return_error(context, detail::linux_efault);
+
+  try {
+    // Pull the iovec table out of guest memory, then validate every segment and
+    // total the transfer up front (the kernel reports EINVAL if the lengths sum
+    // past SSIZE_MAX and EFAULT for any unreadable descriptor).
+    std::vector<std::byte> table(static_cast<std::size_t>(table_bytes));
+    if (auto read = space.read(iov_address, std::span<std::byte>(table.data(), table.size())); !read)
+      return detail::return_error(context, detail::memory_error_to_linux(read.error()));
+
+    std::vector<address_t> bases(iovcnt);
+    std::vector<word_t> lengths(iovcnt);
+    word_t total = 0;
+    for (std::size_t i = 0; i < iovcnt; ++i) {
+      word_t base = 0;
+      word_t len = 0;
+      std::memcpy(&base, table.data() + i * iovec_bytes, sizeof(word_t));
+      std::memcpy(&len, table.data() + i * iovec_bytes + sizeof(word_t), sizeof(word_t));
+      bases[i] = base;
+      lengths[i] = len;
+      if (total + len < total)
+        return detail::return_error(context, detail::linux_einval);
+      total += len;
+      if (detail::range_overflows(base, len))
+        return detail::return_error(context, detail::linux_efault);
+    }
+    if (!detail::fits_host_transfer(total))
+      return detail::return_error(context, detail::linux_einval);
+    if (total == 0)
+      return detail::return_value(context, 0);
+
+    if (is_writev) {
+      // Gather every segment into one contiguous host buffer and write it out,
+      // mirroring writev's "all buffers, in order" semantics. A short write
+      // returns the number of bytes already transferred.
+      ensure_host_sigpipe_ignored();
+      std::vector<std::byte> buffer(static_cast<std::size_t>(total));
+      std::size_t filled = 0;
+      for (std::size_t i = 0; i < iovcnt; ++i) {
+        if (lengths[i] == 0)
+          continue;
+        auto read =
+            space.read(bases[i], std::span<std::byte>(buffer.data() + filled, static_cast<std::size_t>(lengths[i])));
+        if (!read)
+          return detail::return_error(context, detail::memory_error_to_linux(read.error()));
+        filled += static_cast<std::size_t>(lengths[i]);
+      }
+
+      word_t written_total = 0;
+      while (written_total < total) {
+        const auto chunk = static_cast<std::size_t>(
+            std::min<word_t>(total - written_total, static_cast<word_t>(detail::io_chunk_size)));
+        const ssize_t written = write(*fd, buffer.data() + written_total, chunk);
+        if (written < 0)
+          return written_total == 0 ? detail::return_error(context, detail::host_errno_to_linux(errno))
+                                    : detail::return_value(context, static_cast<std::int64_t>(written_total));
+        written_total += static_cast<word_t>(written);
+        complete_pending_pipe_reads(machine, *fd);
+        if (static_cast<std::size_t>(written) < chunk)
+          return detail::return_value(context, static_cast<std::int64_t>(written_total));
+      }
+      return detail::return_value(context, static_cast<std::int64_t>(written_total));
+    }
+
+    // readv: a single host read into a contiguous buffer, then scatter the bytes
+    // actually read across the segments in order.
+    std::vector<std::byte> buffer(static_cast<std::size_t>(total));
+    const ssize_t bytes_read = read(*fd, buffer.data(), buffer.size());
+    if (bytes_read < 0)
+      return detail::return_error(context, detail::host_errno_to_linux(errno));
+    if (bytes_read == 0)
+      return detail::return_value(context, 0);
+
+    std::size_t remaining = static_cast<std::size_t>(bytes_read);
+    std::size_t consumed = 0;
+    for (std::size_t i = 0; i < iovcnt && remaining > 0; ++i) {
+      const auto chunk = std::min<std::size_t>(remaining, static_cast<std::size_t>(lengths[i]));
+      if (chunk == 0)
+        continue;
+      auto written = space.write(bases[i], std::span<const std::byte>(buffer.data() + consumed, chunk));
+      if (!written)
+        return detail::return_error(context, detail::memory_error_to_linux(written.error()));
+      consumed += chunk;
+      remaining -= chunk;
+    }
+    return detail::return_value(context, bytes_read);
+  } catch (const std::bad_alloc&) {
+    return detail::return_error(context, detail::linux_enomem);
+  } catch (...) {
+    return detail::return_error(context, detail::linux_eio);
+  }
+}
+
 std::optional<SyscallResult> SysOpen::try_syscall(Machine& machine, ProcessId context_id, CpuState& context,
                                                   AddressSpace& space, SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_open) && !detail::handles(context, kind, detail::syscall_openat))

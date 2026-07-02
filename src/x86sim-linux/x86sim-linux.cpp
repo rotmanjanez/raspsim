@@ -509,7 +509,8 @@ int main(int argc, char** argv) {
     auto processes = x86sim::linux_syscalls::make_process_table();
     auto callbacks = x86sim::linux_syscalls::host(
         x86sim::linux_syscalls::SysRead{} | x86sim::linux_syscalls::SysReadlink{} | x86sim::linux_syscalls::SysWrite{} |
-        x86sim::linux_syscalls::SysPreadPwrite{} | x86sim::linux_syscalls::SysOpen{} |
+        x86sim::linux_syscalls::SysReadvWritev{} | x86sim::linux_syscalls::SysPreadPwrite{} |
+        x86sim::linux_syscalls::SysOpen{} |
         x86sim::linux_syscalls::SysClose{} | x86sim::linux_syscalls::SysPipe{} | x86sim::linux_syscalls::SysFstat{} |
         x86sim::linux_syscalls::SysStat{} | x86sim::linux_syscalls::SysGetdents64{} |
         x86sim::linux_syscalls::SysFileSystem{} | x86sim::linux_syscalls::SysLseek{} |
