@@ -109,6 +109,7 @@ inline constexpr word_t syscall_utime = 132;
 inline constexpr word_t syscall_arch_prctl = 158;
 inline constexpr word_t syscall_gettid = 186;
 inline constexpr word_t syscall_futex = 202;
+inline constexpr word_t syscall_sched_getaffinity = 204;
 inline constexpr word_t syscall_getdents64 = 217;
 inline constexpr word_t syscall_set_tid_address = 218;
 inline constexpr word_t syscall_clock_gettime = 228;

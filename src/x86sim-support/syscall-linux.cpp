@@ -742,6 +742,43 @@ std::optional<SyscallResult> SysGetrandom::try_syscall(Machine&, ProcessId, CpuS
   return detail::return_value(context, static_cast<std::int64_t>(length));
 }
 
+std::optional<SyscallResult> SysSchedGetaffinity::try_syscall(Machine&, ProcessId context_id, CpuState& context,
+                                                              AddressSpace& space, SyscallKind kind) noexcept {
+  if (!detail::handles(context, kind, detail::syscall_sched_getaffinity))
+    return std::nullopt;
+
+  const word_t pid = detail::syscall_arg(context, 0);
+  if (pid != 0 && pid != context_id)
+    return detail::return_error(context, detail::linux_esrch);
+
+  const word_t cpusetsize = detail::syscall_arg(context, 1);
+  const address_t mask_address = detail::syscall_arg(context, 2);
+
+  // The simulator models one deterministic CPU (nr_cpu_ids == 1), so the kernel
+  // rounds the affinity mask up to a single unsigned long. Mirror the kernel's
+  // "cpusetsize too small to hold every possible CPU" check and its return of
+  // the number of bytes actually copied.
+  constexpr std::size_t model_cpu_count = 1;
+  constexpr std::size_t cpumask_bytes = sizeof(word_t);
+  if (cpusetsize * 8 < model_cpu_count)
+    return detail::return_error(context, detail::linux_einval);
+  if (mask_address == 0)
+    return detail::return_error(context, detail::linux_efault);
+
+  const std::size_t copy_bytes = std::min<word_t>(cpusetsize, cpumask_bytes);
+  if (detail::range_overflows(mask_address, copy_bytes))
+    return detail::return_error(context, detail::linux_efault);
+
+  std::array<std::byte, cpumask_bytes> mask{};
+  for (std::size_t cpu = 0; cpu < model_cpu_count; ++cpu)
+    mask[cpu / 8] |= static_cast<std::byte>(1u << (cpu % 8));
+
+  auto written = space.write(mask_address, std::span<const std::byte>(mask.data(), copy_bytes));
+  if (!written)
+    return detail::return_error(context, detail::memory_error_to_linux(written.error()));
+  return detail::return_value(context, static_cast<std::int64_t>(copy_bytes));
+}
+
 std::optional<SyscallResult> SysPrlimit64::try_syscall(Machine& machine, ProcessId context_id, CpuState& context,
                                                        AddressSpace& space, SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_prlimit64))

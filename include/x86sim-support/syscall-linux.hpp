@@ -140,6 +140,17 @@ struct SysGetrandom {
                                                          SyscallKind) noexcept;
 };
 
+// sched_getaffinity(pid, cpusetsize, mask): reports the CPU affinity mask of the
+// (synthetic) calling task. The simulator models a single deterministic CPU, so
+// the returned mask has exactly CPU 0 set. musl implements
+// sysconf(_SC_NPROCESSORS_ONLN/_CONF) purely through this syscall (with no /proc
+// fallback), so the SQLite test harness -- statically linked against musl --
+// needs it to compute its worker count.
+struct SysSchedGetaffinity {
+  [[nodiscard]] std::optional<SyscallResult> try_syscall(Machine&, ProcessId, CpuState&, AddressSpace&,
+                                                         SyscallKind) noexcept;
+};
+
 struct SysPrlimit64 {
   struct Limit {
     word_t current;
