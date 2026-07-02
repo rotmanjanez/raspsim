@@ -124,6 +124,7 @@ inline constexpr word_t syscall_renameat = 264;
 inline constexpr word_t syscall_readlinkat = 267;
 inline constexpr word_t syscall_faccessat = 269;
 inline constexpr word_t syscall_set_robust_list = 273;
+inline constexpr word_t syscall_utimensat = 280;
 inline constexpr word_t syscall_prlimit64 = 302;
 inline constexpr word_t syscall_dup3 = 292;
 inline constexpr word_t syscall_rseq = 334;

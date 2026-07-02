@@ -1735,6 +1735,7 @@ std::optional<SyscallResult> SysFileSystem::try_syscall(Machine& machine, Proces
       !detail::handles(context, kind, detail::syscall_fchmod) &&
       !detail::handles(context, kind, detail::syscall_umask) &&
       !detail::handles(context, kind, detail::syscall_utime) &&
+      !detail::handles(context, kind, detail::syscall_utimensat) &&
       !detail::handles(context, kind, detail::syscall_mkdirat) &&
       !detail::handles(context, kind, detail::syscall_unlinkat) &&
       !detail::handles(context, kind, detail::syscall_renameat) &&
@@ -1874,6 +1875,56 @@ std::optional<SyscallResult> SysFileSystem::try_syscall(Machine& machine, Proces
     times.actime = static_cast<time_t>(static_cast<std::int64_t>(detail::read_le(bytes, 0, 8)));
     times.modtime = static_cast<time_t>(static_cast<std::int64_t>(detail::read_le(bytes, 8, 8)));
     if (utime(path.value.c_str(), &times) < 0)
+      return detail::return_error(context, detail::host_errno_to_linux(errno));
+    return detail::return_value(context, 0);
+  }
+  case detail::syscall_utimensat: {
+    auto dirfd = host_dirfd_for(context_id, detail::syscall_arg(context, 0));
+    if (!dirfd)
+      return detail::return_error(context, detail::linux_ebadf);
+
+    const address_t path_address = detail::syscall_arg(context, 1);
+    const address_t times_address = detail::syscall_arg(context, 2);
+    const word_t flags = detail::syscall_arg(context, 3);
+    if ((flags & ~detail::linux_at_symlink_nofollow) != 0)
+      return detail::return_error(context, detail::linux_einval);
+
+    // timespec times[2] = { atime, mtime }, each { i64 tv_sec; i64 tv_nsec }.
+    // The special tv_nsec markers UTIME_NOW / UTIME_OMIT share the Linux ABI on
+    // guest and host, so the fields pass straight through; a null pointer means
+    // "set both to now".
+    struct timespec times[2];
+    struct timespec* times_ptr = nullptr;
+    if (times_address != 0) {
+      std::array<std::byte, 32> bytes{};
+      if (auto read_error = detail::read_guest_memory(space, times_address, bytes))
+        return detail::return_error(context, *read_error);
+      times[0].tv_sec = static_cast<time_t>(static_cast<std::int64_t>(detail::read_le(bytes, 0, 8)));
+      times[0].tv_nsec = static_cast<long>(static_cast<std::int64_t>(detail::read_le(bytes, 8, 8)));
+      times[1].tv_sec = static_cast<time_t>(static_cast<std::int64_t>(detail::read_le(bytes, 16, 8)));
+      times[1].tv_nsec = static_cast<long>(static_cast<std::int64_t>(detail::read_le(bytes, 24, 8)));
+      times_ptr = times;
+    }
+
+    int host_flags = 0;
+#ifdef AT_SYMLINK_NOFOLLOW
+    if ((flags & detail::linux_at_symlink_nofollow) != 0)
+      host_flags |= AT_SYMLINK_NOFOLLOW;
+#endif
+
+    // A null pathname makes the raw syscall operate on dirfd itself -- this is
+    // the futimens(fd, times) path in glibc/musl. Forward the null through.
+    int result = -1;
+    if (path_address == 0) {
+      result = utimensat(*dirfd, nullptr, times_ptr, host_flags);
+    } else {
+      auto path = detail::read_c_string(space, path_address);
+      if (!path.ok)
+        return detail::return_error(context, path.error);
+      result = utimensat(*dirfd, path.value.c_str(), times_ptr, host_flags);
+    }
+
+    if (result < 0)
       return detail::return_error(context, detail::host_errno_to_linux(errno));
     return detail::return_value(context, 0);
   }
