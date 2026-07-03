@@ -3,8 +3,10 @@ from __future__ import annotations
 from typing import IO, Any, Callable, Literal
 from pathlib import Path
 
+from . import bindings
 from .bindings import Machine as _Machine, RaspsimException
 from .elf import ELF
+from .fs import MemPath
 
 
 class Machine(_Machine):
@@ -17,6 +19,7 @@ class Machine(_Machine):
         stderr: IO[bytes] | Any | None = None,
         readlink: Callable[[str], str | None] | None = None,
         core: Literal["ooo", "out_of_order", "seq", "sequential"] = "ooo",
+        memfs: bool | bindings.Fs | MemPath = False,
     ):
         """
         Create a new Machine instance.
@@ -41,7 +44,19 @@ class Machine(_Machine):
                 (sequential). Both execute unaligned memory accesses correctly
                 and can run glibc; the sequential core is simpler and slower,
                 the out-of-order core is the cycle-accurate default.
+            memfs: Opt-in in-memory Linux-like filesystem for the guest.
+                ``True`` creates a fresh sandbox; an existing ``bindings.Fs``
+                or ``MemPath`` shares its filesystem (prepopulation, or
+                sharing between Machines). The Unix file syscalls (open, read,
+                write, stat, getdents64, mkdir, ...) then work against the
+                sandbox, which the host can inspect through :attr:`fs`. No fd
+                number is special: stdio stays with the ``stdin``/``stdout``/
+                ``stderr`` streams unless the guest ``dup2()``s over them or
+                :meth:`map_fd` binds a memfs file there. Mutually exclusive
+                with ``readlink``.
         """
+        if isinstance(memfs, MemPath):
+            memfs = memfs.filesystem
         super().__init__(
             glibc=glibc,
             stdin=stdin,
@@ -49,8 +64,26 @@ class Machine(_Machine):
             stderr=stderr,
             readlink=readlink,
             core=core,
+            memfs=memfs,
         )
         self._current_elf: ELF | None = None
+
+    @property
+    def fs(self) -> MemPath:
+        """Root of the guest's in-memory filesystem as a pathlib-like object.
+
+        Only available when the Machine was constructed with ``memfs``.
+        """
+        return MemPath(super().fs)
+
+    def map_fd(self, fd: int, path: MemPath | str, mode: str = "r") -> int:
+        """Bind a memfs file to an arbitrary guest fd number.
+
+        This is how stdio becomes a memfs file: setting up fds 0/1/2 (or any
+        other number) is entirely the caller's choice. ``mode`` follows
+        ``open()``: ``"r"``, ``"w"``, ``"a"``, optionally with ``"+"``.
+        """
+        return super().map_fd(fd, str(path), mode)
 
     def load_elf(self, elf: ELF, abi: Literal["sysv"] = "sysv") -> None:
         """

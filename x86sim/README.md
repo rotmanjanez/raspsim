@@ -191,6 +191,67 @@ sim.run()  # __libc_start_main -> main -> write(1, ...) -> exit_group
 print(out.getvalue())
 ```
 
+### In-memory guest filesystem (memfs)
+
+Pass `memfs=True` to give the guest an opt-in, in-memory Linux-like filesystem.
+The Unix file syscalls (`open`/`openat`, `read`/`write`/`pread64`/`pwrite64`,
+`lseek`, the `stat` family and `statx`, `getdents64`, `mkdir`, `unlink`,
+`rename`, `symlink`/`readlink`, `chdir`/`getcwd`, `truncate`, `dup`/`dup2`/
+`dup3`, `fcntl`, `chmod`, `umask`, `utimensat`, `statfs`, file-backed `mmap`,
+...) then work against a sandbox that never touches the host filesystem — the
+implementation is fully portable and deterministic (timestamps are mutation
+ticks, not wall-clock time).
+
+The host inspects and prepopulates the sandbox through `Machine.fs`, a
+pathlib-flavored path object:
+
+```python
+import io
+from x86sim import Machine
+
+out = io.BytesIO()
+sim = Machine(memfs=True, stdout=out)
+(sim.fs / "data").mkdir()
+(sim.fs / "data" / "in.txt").write_text("hello")
+# ... load a guest that reads /data/in.txt and creates /data/out.txt ...
+sim.run()
+print((sim.fs / "data" / "out.txt").read_text())
+print([p.name for p in (sim.fs / "data").iterdir()])
+```
+
+Errors raise the usual `OSError` subclasses (`FileNotFoundError`,
+`FileExistsError`, `IsADirectoryError`, ...). Note that Python's built-in
+`open()` always dispatches to the host OS and cannot reach a virtual
+filesystem; use `read_bytes()`/`write_text()` and friends.
+
+No fd number is special: wiring up stdin/stdout/stderr is your choice. The
+`stdin`/`stdout`/`stderr` stream kwargs keep working unchanged alongside the
+memfs (guest opens allocate fd numbers around them), the guest may `dup2()` a
+memfs fd over a stream fd, and `map_fd` binds a memfs file to any fd from the
+host side:
+
+```python
+sim = Machine(memfs=True)
+sim.map_fd(1, sim.fs / "stdout.log", "w")  # guest write(1, ...) -> memfs file
+sim.run()
+print((sim.fs / "stdout.log").read_text())
+```
+
+To prepopulate a filesystem before the Machine exists, or to share one between
+Machines, build an `Fs` handle and pass it as the `memfs` argument:
+
+```python
+from x86sim import Fs, Machine
+
+fs = Fs()
+fs.mkdir("/etc")
+fs.write_bytes("/etc/hosts", b"127.0.0.1 localhost\n")
+sim = Machine(memfs=fs)   # a MemPath (e.g. another machine's sim.fs) works too
+```
+
+`memfs` is mutually exclusive with the `readlink` callback (the filesystem
+resolves `readlink()` itself).
+
 ### Working with Registers
 ```python
 # Set register values

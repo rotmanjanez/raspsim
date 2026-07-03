@@ -1,6 +1,8 @@
 #include <pybind11/pybind11.h>
 
 #include "x86sim-support/cpuid.hpp"
+#include "x86sim-support/memfs.hpp"
+#include "x86sim-support/syscall-linux-memfs.hpp"
 #include "x86sim-support/syscall-linux.hpp"
 #include "x86sim/registerfile.hpp"
 #include "x86sim/x86sim.hpp"
@@ -11,6 +13,7 @@
 #include <cstdint>
 #include <cstring>
 #include <format>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -18,6 +21,7 @@
 #include <tuple>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace py = pybind11;
 using namespace py::literals;
@@ -147,6 +151,206 @@ class RegisterFileRef;
 //     mmap/munmap/mremap) when `enable_heap` is set, and
 //   * route guest read/write on configured fds to Python file-like objects
 //     (e.g. io.BytesIO) instead of any host fd.
+// --- memfs host-side view ---------------------------------------------------
+
+// Translate a memfs errno (a Linux value) into a real Python OSError so the
+// interpreter picks the right subclass (FileNotFoundError, FileExistsError,
+// ...). The common values are identical across POSIX platforms, so subclass
+// mapping works for wheels built anywhere.
+[[nodiscard]] const char* memfs_error_message(int error) {
+  switch (error) {
+  case 1:
+    return "Operation not permitted";
+  case 2:
+    return "No such file or directory";
+  case 13:
+    return "Permission denied";
+  case 17:
+    return "File exists";
+  case 20:
+    return "Not a directory";
+  case 21:
+    return "Is a directory";
+  case 22:
+    return "Invalid argument";
+  case 27:
+    return "File too large";
+  case 36:
+    return "File name too long";
+  case 39:
+    return "Directory not empty";
+  case 40:
+    return "Too many levels of symbolic links";
+  default:
+    return "I/O error";
+  }
+}
+
+[[noreturn]] void throw_memfs_error(int error, const std::string& path) {
+  py::object exc = py::module_::import("builtins").attr("OSError")(error, memfs_error_message(error), path);
+  // OSError(errno, ...) normalizes to the matching subclass; raise with the
+  // instance's own type so pybind11 sees a consistent (type, value) pair.
+  PyErr_SetObject(reinterpret_cast<PyObject*>(Py_TYPE(exc.ptr())), exc.ptr());
+  throw py::error_already_set();
+}
+
+// Host-side query/prepopulation handle over a memfs. Constructible standalone
+// (Fs()) to build a filesystem before any Machine exists, shareable between
+// Machines via the Machine(memfs=fs) kwarg, and returned by Machine.fs. Holds
+// the shared state, so the tree outlives any Machine using it. Paths are
+// resolved from the filesystem root (host-side cwd is always "/").
+class PyFs {
+public:
+  PyFs() : state_(x86sim::linux_syscalls::make_memfs_state()) {}
+  explicit PyFs(std::shared_ptr<x86sim::linux_syscalls::MemFsState> state) : state_(std::move(state)) {}
+
+  [[nodiscard]] const std::shared_ptr<x86sim::linux_syscalls::MemFsState>& state() const { return state_; }
+
+  py::list listdir(const std::string& path) {
+    auto node = resolve(path);
+    if (!node->is_dir())
+      throw_memfs_error(20, path); // ENOTDIR
+    py::list names;
+    for (const auto& [name, child] : node->dir().entries)
+      names.append(name);
+    return names;
+  }
+
+  py::bytes read_bytes(const std::string& path) {
+    auto node = resolve(path);
+    if (node->is_dir())
+      throw_memfs_error(21, path); // EISDIR
+    const auto& bytes = node->file().bytes;
+    return {reinterpret_cast<const char*>(bytes.data()), bytes.size()};
+  }
+
+  void write_bytes(const std::string& path, py::bytes data) {
+    auto& fs = *state_->fs;
+    std::shared_ptr<x86sim::memfs::Node> node;
+    auto resolved = fs.resolve(path, fs.root(), "/");
+    if (resolved) {
+      node = *resolved;
+    } else if (resolved.error() == 2) { // ENOENT: create (parents must exist)
+      auto parent = fs.resolve_parent(path, fs.root(), "/");
+      if (!parent)
+        throw_memfs_error(parent.error(), path);
+      auto created = fs.create_file(*parent->dir, parent->leaf, x86sim::memfs::default_file_permissions);
+      if (!created)
+        throw_memfs_error(created.error(), path);
+      node = *created;
+    } else {
+      throw_memfs_error(resolved.error(), path);
+    }
+    if (node->is_dir())
+      throw_memfs_error(21, path); // EISDIR
+
+    std::string raw = std::move(data);
+    if (auto truncated = fs.truncate(*node, 0); !truncated)
+      throw_memfs_error(truncated.error(), path);
+    if (auto written = fs.write(*node, 0, std::as_bytes(std::span(raw.data(), raw.size()))); !written)
+      throw_memfs_error(written.error(), path);
+  }
+
+  void mkdir(const std::string& path) {
+    auto parent = resolve_parent(path);
+    if (auto created = state_->fs->make_directory(*parent.dir, parent.leaf, 0755); !created)
+      throw_memfs_error(created.error(), path);
+  }
+
+  void unlink(const std::string& path) {
+    auto parent = resolve_parent(path);
+    if (auto removed = state_->fs->unlink(*parent.dir, parent.leaf); !removed)
+      throw_memfs_error(removed.error(), path);
+  }
+
+  void rmdir(const std::string& path) {
+    auto parent = resolve_parent(path);
+    if (auto removed = state_->fs->remove_directory(*parent.dir, parent.leaf); !removed)
+      throw_memfs_error(removed.error(), path);
+  }
+
+  void rename(const std::string& source, const std::string& target) {
+    auto source_parent = resolve_parent(source);
+    auto target_parent = resolve_parent(target);
+    if (auto renamed = state_->fs->rename(*source_parent.dir, source_parent.leaf, *target_parent.dir,
+                                          target_parent.leaf);
+        !renamed)
+      throw_memfs_error(renamed.error(), source);
+  }
+
+  void symlink(const std::string& target, const std::string& link_path) {
+    auto parent = resolve_parent(link_path);
+    if (auto created = state_->fs->make_symlink(*parent.dir, parent.leaf, target); !created)
+      throw_memfs_error(created.error(), link_path);
+  }
+
+  std::string readlink(const std::string& path) {
+    auto node = resolve(path, /*follow=*/false);
+    if (!node->is_symlink())
+      throw_memfs_error(22, path); // EINVAL
+    return node->symlink().target;
+  }
+
+  py::dict stat(const std::string& path, bool follow_symlinks) {
+    auto node = resolve(path, follow_symlinks);
+    const auto info = state_->fs->stat(*node);
+    py::dict result;
+    result["st_mode"] = info.mode;
+    result["st_ino"] = info.ino;
+    result["st_nlink"] = info.nlink;
+    result["st_size"] = info.size;
+    result["st_atime"] = info.atime;
+    result["st_mtime"] = info.mtime;
+    result["st_ctime"] = info.ctime;
+    return result;
+  }
+
+  void truncate(const std::string& path, std::uint64_t size) {
+    auto node = resolve(path);
+    if (auto truncated = state_->fs->truncate(*node, size); !truncated)
+      throw_memfs_error(truncated.error(), path);
+  }
+
+  bool exists(const std::string& path) { return try_resolve(path, true) != nullptr; }
+  bool is_file(const std::string& path) {
+    auto node = try_resolve(path, true);
+    return node && node->is_file();
+  }
+  bool is_dir(const std::string& path) {
+    auto node = try_resolve(path, true);
+    return node && node->is_dir();
+  }
+  bool is_symlink(const std::string& path) {
+    auto node = try_resolve(path, false);
+    return node && node->is_symlink();
+  }
+
+private:
+  [[nodiscard]] std::shared_ptr<x86sim::memfs::Node> resolve(const std::string& path, bool follow = true) {
+    auto& fs = *state_->fs;
+    auto resolved = fs.resolve(path, fs.root(), "/", follow);
+    if (!resolved)
+      throw_memfs_error(resolved.error(), path);
+    return *resolved;
+  }
+
+  [[nodiscard]] std::shared_ptr<x86sim::memfs::Node> try_resolve(const std::string& path, bool follow) {
+    auto& fs = *state_->fs;
+    auto resolved = fs.resolve(path, fs.root(), "/", follow);
+    return resolved ? *resolved : nullptr;
+  }
+
+  [[nodiscard]] x86sim::memfs::Filesystem::ParentRef resolve_parent(const std::string& path) {
+    auto& fs = *state_->fs;
+    auto parent = fs.resolve_parent(path, fs.root(), "/");
+    if (!parent)
+      throw_memfs_error(parent.error(), path);
+    return *parent;
+  }
+
+  std::shared_ptr<x86sim::linux_syscalls::MemFsState> state_;
+};
+
 // Host I/O is never used: stdin/stdout/stderr map to caller-supplied Python
 // objects only.
 class PyHost : public x86sim::HostCallbacks {
@@ -176,6 +380,27 @@ public:
 
     if (n == abi::exit || n == abi::exit_group)
       return guest_exit();
+
+    // Opt-in memfs personality, consulted before the stream shortcuts below so
+    // a memfs entry installed at any fd number (guest dup2 or host map_fd)
+    // shadows a Python stream at the same number. Fds that are not in the
+    // memfs table fall through here (no fd number is special to the memfs).
+    if (memfs_handler) {
+      if (auto r = memfs_handler->try_syscall(machine, pid, ctx, space, kind))
+        return *r;
+      // Metadata syscalls on the embedder's own stream fds are answered here:
+      // glibc stdio startup fstat()s and ioctl()s fd 1, and nothing else in
+      // the wheel implements those.
+      if (n == kSyscallFstat) {
+        if (auto r = stream_fstat(ctx, space))
+          return *r;
+      }
+      if (n == kSyscallIoctl) {
+        if (auto r = stream_ioctl(ctx))
+          return *r;
+      }
+    }
+
     if (n == abi::read)
       return do_read(ctx, space);
     if (n == abi::write)
@@ -221,6 +446,12 @@ public:
   // -ENOENT. Routed through Python (like read/write) rather than the host so the
   // binding stays free of real filesystem access.
   py::object readlink_cb = py::none();
+  // Opt-in memfs personality: null/empty when disabled. The state is shared
+  // with the PyFs handle(s) the user sees, so the tree outlives the Machine.
+  std::shared_ptr<x86sim::linux_syscalls::MemFsState> memfs_state;
+  std::optional<x86sim::linux_syscalls::SysMemFs> memfs_handler;
+
+  [[nodiscard]] x86sim::linux_syscalls::ProcessId process_id() const { return pid; }
 
 private:
   // Cap a single read/write transfer so a bogus guest count cannot trigger a
@@ -232,8 +463,11 @@ private:
   // negated Linux errno values returned to the guest on the failure paths.
   static constexpr word_t kSyscallReadlink = 89;
   static constexpr word_t kSyscallReadlinkat = 267;
+  static constexpr word_t kSyscallFstat = 5;
+  static constexpr word_t kSyscallIoctl = 16;
   static constexpr std::int64_t kLinuxEnoent = 2;
   static constexpr std::int64_t kLinuxEnosys = 38;
+  static constexpr std::int64_t kLinuxEnotty = 25;
 
   static x86sim::SyscallResult guest_exit() {
     return {.reason = x86sim::StopReason::guest_exit, .continue_execution = false, .message = {}};
@@ -373,6 +607,42 @@ private:
     return abi::return_value(ctx, static_cast<std::int64_t>(n));
   }
 
+  // fstat on one of the embedder's stream fds: answer with a synthetic
+  // character-device stat (mode 020620, like a tty) so glibc stdio startup
+  // succeeds. Only used when memfs is enabled; returns std::nullopt for fds
+  // that are not configured streams.
+  std::optional<x86sim::SyscallResult> stream_fstat(x86sim::CpuState& ctx, x86sim::AddressSpace& space) {
+    namespace abi = x86sim::linux_syscalls::abi;
+    const int fd = static_cast<int>(abi::syscall_arg(ctx, 0));
+    auto it = fds.find(fd);
+    if (it == fds.end() || it->second.is_none())
+      return std::nullopt;
+
+    std::array<std::byte, 144> bytes{};
+    auto write_le = [&](std::size_t offset, std::uint64_t value, std::size_t width) noexcept {
+      for (std::size_t i = 0; i < width; ++i)
+        bytes[offset + i] = static_cast<std::byte>((value >> (i * 8)) & 0xff);
+    };
+    write_le(0, 1, 8);       // st_dev
+    write_le(8, 1, 8);       // st_ino
+    write_le(16, 1, 8);      // st_nlink
+    write_le(24, 020620, 4); // st_mode: S_IFCHR | 0620
+    write_le(56, 1024, 8);   // st_blksize
+
+    if (auto r = space.write(abi::syscall_arg(ctx, 1), bytes); !r)
+      return unsupported();
+    return abi::return_value(ctx, 0);
+  }
+
+  std::optional<x86sim::SyscallResult> stream_ioctl(x86sim::CpuState& ctx) {
+    namespace abi = x86sim::linux_syscalls::abi;
+    const int fd = static_cast<int>(abi::syscall_arg(ctx, 0));
+    auto it = fds.find(fd);
+    if (it == fds.end() || it->second.is_none())
+      return std::nullopt;
+    return abi::return_value(ctx, -kLinuxEnotty);
+  }
+
   // Read a NUL-terminated guest string into `out` (without the terminator).
   // Returns false on unreadable memory or a missing terminator within the cap.
   static bool read_guest_cstring(x86sim::AddressSpace& space, address_t addr, std::string& out) {
@@ -450,11 +720,29 @@ public:
 
   PyMachine(const char* logfile, bool sse, bool x87, bool perfect_cache, bool static_branchpred, bool glibc,
             py::object stdin_obj, py::object stdout_obj, py::object stdout_err, py::object readlink_cb,
-            const char* core)
+            const char* core, py::object memfs)
       : machine(std::make_unique<x86sim::Machine>(
             host, build_options(logfile, sse, x87, perfect_cache, static_branchpred, core))),
         address_space(*machine) {
     host.enable_glibc = glibc;
+
+    // Opt-in memfs: True creates a fresh filesystem, an Fs object shares an
+    // existing one (prepopulation / cross-Machine sharing). memfs owns the
+    // whole path namespace, so the readlink callback is mutually exclusive.
+    const bool memfs_off = memfs.is_none() || (py::isinstance<py::bool_>(memfs) && !memfs.cast<bool>());
+    if (!memfs_off) {
+      if (!readlink_cb.is_none())
+        throw py::value_error("memfs and readlink are mutually exclusive: with memfs enabled the in-memory "
+                              "filesystem resolves readlink()");
+      if (py::isinstance<py::bool_>(memfs))
+        host.memfs_state = x86sim::linux_syscalls::make_memfs_state();
+      else if (py::isinstance<PyFs>(memfs))
+        host.memfs_state = memfs.cast<PyFs&>().state();
+      else
+        throw py::value_error("memfs must be a bool or an x86sim Fs object");
+      host.memfs_handler.emplace(host.memfs_state);
+    }
+
     if (!readlink_cb.is_none()) {
       if (!py::hasattr(readlink_cb, "__call__"))
         throw py::value_error("readlink must be a callable: readlink(path: str) -> str | None");
@@ -465,6 +753,11 @@ public:
     map_stream(0, std::move(stdin_obj), "read", "stdin");
     map_stream(1, std::move(stdout_obj), "write", "stdout");
     map_stream(2, std::move(stdout_err), "write", "stderr");
+    // Every fd routed to a Python stream is reserved: guest opens never
+    // allocate those numbers (though dup2/map_fd may deliberately shadow them).
+    if (host.memfs_state)
+      for (const auto& [fd, stream] : host.fds)
+        host.memfs_state->reserved_fds.insert(fd);
   }
 
   ~PyMachine() = default;
@@ -487,6 +780,83 @@ public:
   std::string str() { return std::format("{}", static_cast<x86sim::RegisterFile&>(cpu_state)); }
 
   void run(unsigned long long ninstr);
+
+  // Host-side handle to the in-memory filesystem (only with memfs enabled).
+  PyFs fs() {
+    if (!host.memfs_state)
+      throw py::value_error("memfs is not enabled on this Machine (construct it with memfs=True)");
+    return PyFs(host.memfs_state);
+  }
+
+  // Bind a memfs file to an arbitrary guest fd number — including 0/1/2, which
+  // is how stdio becomes a memfs file. mode follows open(): "r", "w", "a",
+  // optionally with "+" (and an ignored "b").
+  int map_fd(int fd, const std::string& path, const std::string& mode) {
+    if (!host.memfs_state)
+      throw py::value_error("memfs is not enabled on this Machine (construct it with memfs=True)");
+    if (fd < 0)
+      throw py::value_error("fd must be non-negative");
+
+    bool readable = false, writable = false, append = false, create = false, truncate = false;
+    int primaries = 0;
+    for (const char c : mode) {
+      switch (c) {
+      case 'r':
+        readable = true;
+        ++primaries;
+        break;
+      case 'w':
+        writable = create = truncate = true;
+        ++primaries;
+        break;
+      case 'a':
+        writable = create = append = true;
+        ++primaries;
+        break;
+      case '+':
+        readable = writable = true;
+        break;
+      case 'b':
+      case 't':
+        break;
+      default:
+        throw py::value_error(std::format("invalid mode: '{}'", mode));
+      }
+    }
+    if (primaries != 1)
+      throw py::value_error(std::format("invalid mode: '{}'", mode));
+
+    auto& state = *host.memfs_state;
+    auto& fs = *state.fs;
+    std::shared_ptr<x86sim::memfs::Node> node;
+    auto resolved = fs.resolve(path, fs.root(), "/");
+    if (resolved) {
+      node = *resolved;
+    } else if (resolved.error() == 2 && create) { // ENOENT
+      auto parent = fs.resolve_parent(path, fs.root(), "/");
+      if (!parent)
+        throw_memfs_error(parent.error(), path);
+      auto created = fs.create_file(*parent->dir, parent->leaf, x86sim::memfs::default_file_permissions);
+      if (!created)
+        throw_memfs_error(created.error(), path);
+      node = *created;
+    } else {
+      throw_memfs_error(resolved.error(), path);
+    }
+    if (node->is_dir())
+      throw_memfs_error(21, path); // EISDIR: map_fd is for regular files
+    if (truncate)
+      if (auto truncated = fs.truncate(*node, 0); !truncated)
+        throw_memfs_error(truncated.error(), path);
+
+    // Linux O_* encoding: O_WRONLY=1, O_RDWR=2, O_APPEND=02000.
+    word_t flags = readable && writable ? 2 : writable ? 1 : 0;
+    if (append)
+      flags |= 02000;
+    state.install_at(host.process_id(), fd,
+                     x86sim::linux_syscalls::MemFsState::OpenFile{.node = std::move(node), .status_flags = flags});
+    return fd;
+  }
 
   PyHost host;
   x86sim::CpuState cpu_state;
@@ -914,12 +1284,44 @@ PYBIND11_MODULE(bindings, m) {
       .REGXMM(12)
       .REGXMM(13);
 
+  py::class_<PyFs>(m, "Fs",
+                   "Host-side handle to an in-memory guest filesystem (memfs).\n\n"
+                   "Construct standalone to prepopulate a filesystem before creating a Machine "
+                   "(pass it as Machine(memfs=fs)), share it between Machines, or obtain one from "
+                   "Machine.fs. All paths are absolute or relative to the filesystem root. Errors "
+                   "raise OSError subclasses (FileNotFoundError, FileExistsError, ...).")
+      .def(py::init<>(), "Create a handle owning a fresh, empty filesystem")
+      .def("listdir", &PyFs::listdir, "path"_a, "List the names in a directory (deterministic order)")
+      .def("read_bytes", &PyFs::read_bytes, "path"_a, "Return the whole content of a file as bytes")
+      .def("write_bytes", &PyFs::write_bytes, "path"_a, "data"_a,
+           "Replace the content of a file (created if missing; parent directories must exist)")
+      .def("mkdir", &PyFs::mkdir, "path"_a, "Create a directory (parent must exist)")
+      .def("unlink", &PyFs::unlink, "path"_a, "Remove a file or symlink")
+      .def("rmdir", &PyFs::rmdir, "path"_a, "Remove an empty directory")
+      .def("rename", &PyFs::rename, "source"_a, "target"_a, "Rename/move with Linux rename(2) semantics")
+      .def("symlink", &PyFs::symlink, "target"_a, "link_path"_a, "Create a symbolic link at link_path")
+      .def("readlink", &PyFs::readlink, "path"_a, "Return the target of a symbolic link")
+      .def("stat", &PyFs::stat, "path"_a, "follow_symlinks"_a = true,
+           "Stat a path; returns a dict with st_mode/st_ino/st_nlink/st_size/st_atime/st_mtime/st_ctime. "
+           "Timestamps are deterministic mutation ticks, not wall-clock time.")
+      .def("truncate", &PyFs::truncate, "path"_a, "size"_a, "Truncate or zero-extend a file")
+      .def("exists", &PyFs::exists, "path"_a, "Whether the path resolves to an existing node")
+      .def("is_file", &PyFs::is_file, "path"_a, "Whether the path resolves to a regular file")
+      .def("is_dir", &PyFs::is_dir, "path"_a, "Whether the path resolves to a directory")
+      .def("is_symlink", &PyFs::is_symlink, "path"_a, "Whether the path itself is a symbolic link")
+      // Two handles are equal when they view the same filesystem state.
+      .def("__eq__",
+           [](const PyFs& self, const py::object& other) {
+             return py::isinstance<PyFs>(other) && self.state() == other.cast<const PyFs&>().state();
+           })
+      .def("__hash__", [](const PyFs& self) { return std::hash<const void*>{}(self.state().get()); });
+
   py::class_<PyMachine>(m, "Machine", "A class to interact with the simulator")
       .def(py::init<const char*, bool, bool, bool, bool, bool, py::object, py::object, py::object, py::object,
-                    const char*>(),
+                    const char*, py::object>(),
            "logfile"_a = "", "sse"_a = true, "x87"_a = true, "perfect_cache"_a = false, "static_branchpred"_a = false,
            "glibc"_a = false, "stdin"_a = py::none(), "stdout"_a = py::none(), "stderr"_a = py::none(),
-           "readlink"_a = py::none(), "core"_a = "ooo",
+           "readlink"_a = py::none(), "core"_a = "ooo", "memfs"_a = py::none(),
            "Create a new Machine instance.\n\nSet glibc=True to enable the portable Linux "
            "glibc-startup syscalls: the malloc/free heap (brk + anonymous mmap/munmap/mremap) "
            "plus arch_prctl, set_tid_address, set_robust_list, rseq, prlimit64, uname, futex and "
@@ -927,6 +1329,11 @@ PYBIND11_MODULE(bindings, m) {
            "guest read/write on fds 0/1/2 to Python (e.g. io.BytesIO); host fds are never used. Pass "
            "readlink=callable to resolve guest readlink()/readlinkat() calls (path: str -> str | "
            "None), e.g. for /proc/self/exe; without it readlink returns -ENOSYS.\n\n"
+           "Set memfs=True (or pass an x86sim Fs object to share/prepopulate one) to give the guest "
+           "an in-memory Linux-like filesystem: open/read/write/stat/getdents64/... work against a "
+           "portable sandbox that the host can inspect through Machine.fs. No fd number is special: "
+           "stdio stays with the stdin/stdout/stderr streams unless the guest dup2()s over them or "
+           "map_fd() binds a memfs file there. memfs is mutually exclusive with readlink.\n\n"
            "core selects the CPU model: \"ooo\" (default, out-of-order) or \"seq\" (sequential). "
            "The sequential core is slower but handles unaligned memory accesses correctly; the "
            "out-of-order core currently cannot, so running glibc (which uses unaligned SSE in its "
@@ -943,5 +1350,10 @@ PYBIND11_MODULE(bindings, m) {
            "If `length` is 0, the size of `data` will be used as length.")
       .def_property_readonly(
           "memimg", [](PyMachine& sim) { return MemImg(sim); }, "Get a memory image object")
+      .def_property_readonly("fs", &PyMachine::fs,
+                             "Host-side Fs handle to the guest's in-memory filesystem (memfs=True only)")
+      .def("map_fd", &PyMachine::map_fd, "fd"_a, "path"_a, "mode"_a = "r",
+           "Bind a memfs file to an arbitrary guest fd number (including 0/1/2, replacing a "
+           "configured stream). mode follows open(): \"r\", \"w\", \"a\", optionally with \"+\".")
       .def("__str__", &PyMachine::str, "Get the string representation of the current state of the simulator");
 }

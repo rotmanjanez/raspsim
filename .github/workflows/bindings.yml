@@ -59,8 +59,13 @@ jobs:
           CIBW_ENVIRONMENT_LINUX: >-
             PATH=/opt/rh/gcc-toolset-14/root/usr/bin:/opt/rh/gcc-toolset-13/root/usr/bin:$PATH
             CXXFLAGS=-Wno-invalid-offsetof
-          CIBW_TEST_REQUIRES: "pyelftools"
-          CIBW_TEST_COMMAND: "python -c \"import x86sim; x86sim.Machine()\""
+          CIBW_TEST_REQUIRES: "pyelftools pytest"
+          # The import smoke test guards the default path; the pytest suite
+          # covers the memfs host API and runs guest code against the wheel
+          # (the gcc toolset installed above provides the guest compiler).
+          CIBW_TEST_COMMAND: >-
+            python -c "import x86sim; x86sim.Machine()" &&
+            python -m pytest {project}/tests/python -q
 
       - uses: actions/upload-artifact@v7
         with:

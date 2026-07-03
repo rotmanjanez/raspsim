@@ -1,3 +1,4 @@
 pybind11
 pybind11-stubgen
 build
+pytest

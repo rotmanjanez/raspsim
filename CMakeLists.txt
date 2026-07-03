@@ -53,13 +53,18 @@ if(X86SIM_BUILD_DEFAULTS)
   target_sources(x86sim_defaults
     PRIVATE
       src/x86sim-support/cpuid.cpp
+      src/x86sim-support/memfs.cpp
       src/x86sim-support/syscall-linux.cpp
+      src/x86sim-support/syscall-linux-memfs.cpp
     PUBLIC
       FILE_SET HEADERS
       BASE_DIRS include
       FILES
         include/x86sim-support/cpuid.hpp
+        include/x86sim-support/memfs.hpp
+        include/x86sim-support/namespaces.hpp
         include/x86sim-support/syscall-linux.hpp
+        include/x86sim-support/syscall-linux-memfs.hpp
   )
   target_link_libraries(x86sim_defaults PUBLIC x86sim::x86sim)
   target_include_directories(x86sim_defaults PRIVATE src/x86sim)
@@ -140,4 +145,7 @@ endif()
 if(X86SIM_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests/sqlite3)
+  if(X86SIM_BUILD_DEFAULTS)
+    add_subdirectory(tests/memfs)
+  endif()
 endif()
