@@ -1731,6 +1731,9 @@ std::optional<SyscallResult> SysFileSystem::try_syscall(Machine& machine, Proces
       !detail::handles(context, kind, detail::syscall_mkdir) &&
       !detail::handles(context, kind, detail::syscall_rmdir) &&
       !detail::handles(context, kind, detail::syscall_unlink) &&
+      !detail::handles(context, kind, detail::syscall_symlink) &&
+      !detail::handles(context, kind, detail::syscall_fsync) &&
+      !detail::handles(context, kind, detail::syscall_fdatasync) &&
       !detail::handles(context, kind, detail::syscall_chmod) &&
       !detail::handles(context, kind, detail::syscall_fchmod) &&
       !detail::handles(context, kind, detail::syscall_umask) &&
@@ -1848,6 +1851,30 @@ std::optional<SyscallResult> SysFileSystem::try_syscall(Machine& machine, Proces
 
     const auto mode = static_cast<mode_t>(detail::syscall_arg(context, 1) & 07777);
     if (fchmod(*fd, mode) < 0)
+      return detail::return_error(context, detail::host_errno_to_linux(errno));
+    return detail::return_value(context, 0);
+  }
+  case detail::syscall_fsync:
+  case detail::syscall_fdatasync: {
+    auto fd = host_fd_for(context_id, detail::syscall_arg(context, 0));
+    if (!fd)
+      return detail::return_error(context, detail::linux_ebadf);
+
+    const int result = (number == detail::syscall_fdatasync) ? fdatasync(*fd) : fsync(*fd);
+    if (result < 0)
+      return detail::return_error(context, detail::host_errno_to_linux(errno));
+    return detail::return_value(context, 0);
+  }
+  case detail::syscall_symlink: {
+    auto target = detail::read_c_string(space, detail::syscall_arg(context, 0));
+    if (!target.ok)
+      return detail::return_error(context, target.error);
+
+    auto linkpath = detail::read_c_string(space, detail::syscall_arg(context, 1));
+    if (!linkpath.ok)
+      return detail::return_error(context, linkpath.error);
+
+    if (symlink(target.value.c_str(), linkpath.value.c_str()) < 0)
       return detail::return_error(context, detail::host_errno_to_linux(errno));
     return detail::return_value(context, 0);
   }

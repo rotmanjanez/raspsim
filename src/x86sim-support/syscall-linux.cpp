@@ -826,8 +826,24 @@ std::optional<SyscallResult> SysPrlimit64::try_syscall(Machine& machine, Process
 std::optional<SyscallResult> SysSignals::try_syscall(Machine&, ProcessId, CpuState& context, AddressSpace& space,
                                                      SyscallKind kind) noexcept {
   if (!detail::handles(context, kind, detail::syscall_rt_sigaction) &&
-      !detail::handles(context, kind, detail::syscall_rt_sigprocmask)) {
+      !detail::handles(context, kind, detail::syscall_rt_sigprocmask) &&
+      !detail::handles(context, kind, detail::syscall_tkill) &&
+      !detail::handles(context, kind, detail::syscall_tgkill)) {
     return std::nullopt;
+  }
+
+  const word_t number = detail::syscall_number(context);
+  if (number == detail::syscall_tkill || number == detail::syscall_tgkill) {
+    // Phase 1 models a single thread and does not deliver signals (rt_sigaction
+    // and rt_sigprocmask are accepted no-ops), so tkill/tgkill just validate the
+    // signal number and report success. The signal is the last argument --
+    // tkill(tid, sig) / tgkill(tgid, tid, sig). musl routes raise() and
+    // pthread_kill() through these; a self-directed abort() still terminates
+    // because musl's abort() falls through to _Exit once the raise "returns".
+    const word_t sig = detail::syscall_arg(context, number == detail::syscall_tgkill ? 2 : 1);
+    if (sig > 64)
+      return detail::return_error(context, detail::linux_einval);
+    return detail::return_value(context, 0);
   }
 
   return detail::return_value(context, 0);
